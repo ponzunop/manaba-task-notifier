@@ -33,6 +33,11 @@ public class User {
     @Column(columnDefinition = "TEXT")
     private String pushKeys;
 
+    @Column(columnDefinition = "TEXT")
+    private String imapPassword;
+
+    private String authType;
+
     public User() {
     }
 
@@ -90,5 +95,21 @@ public class User {
 
     public void setPushKeys(String pushKeys) {
         this.pushKeys = pushKeys;
+    }
+
+    public String getImapPassword() {
+        return imapPassword;
+    }
+
+    public void setImapPassword(String imapPassword) {
+        this.imapPassword = imapPassword;
+    }
+
+    public String getAuthType() {
+        return authType;
+    }
+
+    public void setAuthType(String authType) {
+        this.authType = authType;
     }
 }

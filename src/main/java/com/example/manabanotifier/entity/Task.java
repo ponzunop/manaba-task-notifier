@@ -32,6 +32,15 @@ public class Task {
 
     private LocalDateTime deadline;
 
+    @Column(name = "open_time")
+    private LocalDateTime openTime;
+
+    @Column(name = "task_type")
+    private String taskType = "小テスト";
+
+    @Column(name = "task_url", length = 1000)
+    private String taskUrl;
+
     @Column(name = "is_submitted")
     private boolean submitted;
 
@@ -88,5 +97,29 @@ public class Task {
 
     public void setSubmitted(boolean submitted) {
         this.submitted = submitted;
+    }
+
+    public LocalDateTime getOpenTime() {
+        return openTime;
+    }
+
+    public void setOpenTime(LocalDateTime openTime) {
+        this.openTime = openTime;
+    }
+
+    public String getTaskType() {
+        return taskType;
+    }
+
+    public void setTaskType(String taskType) {
+        this.taskType = taskType;
+    }
+
+    public String getTaskUrl() {
+        return taskUrl;
+    }
+
+    public void setTaskUrl(String taskUrl) {
+        this.taskUrl = taskUrl;
     }
 }
