@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="ja" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通知設定 | manaba 課題通知システム</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+    <style>
+        :root {
+            --bg: #f4f7fb;
+            --surface: #ffffff;
+            --surface-muted: #f8fafc;
+            --border: #e2e8f0;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --primary-soft: #eff6ff;
+            --success: #16a34a;
+            --success-bg: #dcfce7;
+            --danger: #dc2626;
+            --danger-bg: #fee2e2;
+            --warning: #d97706;
+            --warning-bg: #fef3c7;
+            --shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+            --radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .navbar {
+            background: #0f172a;
+            color: #ffffff;
+            padding: 0.85rem 1.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.15);
+        }
+
+        .navbar-brand {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #ffffff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .navbar-links {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            color: #cbd5e1;
+            text-decoration: none;
+            padding: 0.45rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.92rem;
+            font-weight: 500;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+
+        .nav-link.active {
+            background: var(--primary);
+            color: #ffffff;
+        }
+
+        .navbar-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-btn {
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            padding: 0.42rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        .container {
+            max-width: 980px;
+            margin: 1.75rem auto 3rem;
+            padding: 0 1rem;
+        }
+
+        .page-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .page-header h1 {
+            margin: 0;
+            font-size: 1.65rem;
+        }
+
+        .page-subtitle {
+            margin: 0.25rem 0 0;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .user-pill {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 0.45rem 0.9rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .alert {
+            padding: 0.9rem 1.1rem;
+            border-radius: var(--radius);
+            margin-bottom: 1.25rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .alert-success {
+            background: var(--success-bg);
+            color: #14532d;
+            border: 1px solid #86efac;
+        }
+
+        .alert-error {
+            background: var(--danger-bg);
+            color: #7f1d1d;
+            border: 1px solid #fca5a5;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .summary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem 1.2rem;
+            box-shadow: var(--shadow);
+        }
+
+        .summary-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+        }
+
+        .summary-value {
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .summary-sub {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.4rem 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: var(--shadow);
+        }
+
+        .card-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.9rem;
+            padding-bottom: 0.7rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .card-desc {
+            margin: 0 0 1rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+        }
+
+        .btn-chip {
+            background: var(--surface-muted);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.3rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .btn-chip:hover {
+            background: var(--primary-soft);
+            border-color: #93c5fd;
+            color: var(--primary);
+        }
+
+        .timing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 1.1rem;
+        }
+
+        .timing-option {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.7rem 0.9rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-muted);
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .timing-option:hover {
+            border-color: var(--primary);
+            background: var(--primary-soft);
+        }
+
+        .timing-option input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+
+        .custom-timing-box {
+            background: var(--surface-muted);
+            border: 1px dashed var(--border);
+            border-radius: 10px;
+            padding: 0.9rem 1rem;
+        }
+
+        .custom-timing-box label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+        }
+
+        .input-control {
+            width: 100%;
+            padding: 0.55rem 0.8rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            background: #ffffff;
+        }
+
+        .input-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .hint-text {
+            margin: 0.35rem 0 0;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .course-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.7rem;
+        }
+
+        .course-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.8rem;
+            padding: 0.85rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-muted);
+        }
+
+        .course-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            min-width: 200px;
+            flex: 1;
+        }
+
+        .course-name {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .course-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.2rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+
+        .status-on {
+            background: var(--success-bg);
+            color: #166534;
+        }
+
+        .status-off {
+            background: #e2e8f0;
+            color: #475569;
+        }
+
+        /* Toggle Switch */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 26px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background-color: #cbd5e1;
+            transition: 0.2s;
+            border-radius: 999px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #ffffff;
+            transition: 0.2s;
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        .switch input:checked + .slider {
+            background-color: var(--primary);
+        }
+
+        .switch input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+
+        .btn-delete {
+            background: transparent;
+            border: 1px solid #fecaca;
+            color: var(--danger);
+            padding: 0.35rem 0.7rem;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            cursor: pointer;
+        }
+
+        .btn-delete:hover {
+            background: var(--danger-bg);
+        }
+
+        .form-footer {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-top: 1.25rem;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #ffffff;
+            border: none;
+            padding: 0.75rem 1.6rem;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 0.65rem 1.15rem;
+            border-radius: 10px;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-secondary:hover {
+            background: var(--surface-muted);
+        }
+
+        .inline-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+        }
+
+        .inline-form .input-control {
+            flex: 1;
+            min-width: 220px;
+        }
+
+        .empty-state {
+            padding: 1.25rem;
+            text-align: center;
+            background: var(--surface-muted);
+            border-radius: 10px;
+            color: var(--text-muted);
+        }
+
+        .toast {
+            position: fixed;
+            right: 1.25rem;
+            bottom: 1.25rem;
+            background: #0f172a;
+            color: #ffffff;
+            padding: 0.9rem 1.15rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.25);
+            max-width: 340px;
+            z-index: 1000;
+            display: none;
+        }
+
+        .toast.show {
+            display: block;
+        }
+
+        .toast-title {
+            font-weight: 700;
+            margin-bottom: 0.2rem;
+        }
+
+        .toast-body {
+            font-size: 0.88rem;
+            color: #cbd5e1;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar">
+    <a class="navbar-brand" th:href="@{/tasks}">
+        <span>&#128276;</span>
+        <span>manaba 課題通知システム</span>
+    </a>
+    <div class="navbar-links">
+        <a class="nav-link" th:href="@{/tasks}">課題一覧</a>
+        <a class="nav-link active" th:href="@{/settings}">通知設定</a>
+        <a class="nav-link" th:href="@{/history}">通知履歴</a>
+    </div>
+    <div class="navbar-actions">
+        <form th:action="@{/auth/fetch-tasks}" method="post" style="margin:0;">
+            <button type="submit" class="nav-btn">&#8635; Gmail同期</button>
+        </form>
+        <button type="button" class="nav-btn" onclick="requestPushPermission()">&#128276; 通知許可</button>
+        <a class="nav-btn" th:href="@{/auth/logout}">ログアウト</a>
+    </div>
+</nav>
+
+<main class="container">
+    <div class="page-header">
+        <div>
+            <h1>通知設定</h1>
+            <p class="page-subtitle">締切前の複数タイミング通知と、科目ごとの通知 ON / OFF を設定します。</p>
+        </div>
+        <div class="user-pill">
+            ログイン中: <strong th:text="${displayName}">user</strong>
+            <span th:if="${userEmail != null and !userEmail.isEmpty()}" th:text="' (' + ${userEmail} + ')'"></span>
+        </div>
+    </div>
+
+    <div th:if="${successMessage}" class="alert alert-success" role="status">
+        <span>&#10004;</span>
+        <span th:text="${successMessage}">通知設定を保存しました</span>
+    </div>
+
+    <div th:if="${errorMessage}" class="alert alert-error" role="alert">
+        <span>&#9888;</span>
+        <span th:text="${errorMessage}">通知時刻を正しく設定してください</span>
+    </div>
+
+    <!-- サマリーカード -->
+    <section class="summary-grid">
+        <div class="summary-card">
+            <div class="summary-label">現在の通知タイミング</div>
+            <div class="summary-value" th:text="${currentTimingsSummary}">24時間前 / 5時間前 / 1時間前</div>
+            <div class="summary-sub">DB保存値: <code th:text="${currentTimingsRaw}">24,5,1</code></div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-label">通知対象の科目数</div>
+            <div class="summary-value">
+                <span th:text="${enabledCourseCount}">0</span> / <span th:text="${totalCourseCount}">0</span> 科目 ON
+            </div>
+            <div class="summary-sub">提出済み課題は自動で通知対象外になります</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-label">Web Push / ブラウザ通知</div>
+            <div class="summary-value" id="push-permission-status">確認中...</div>
+            <div class="summary-sub">
+                <span th:if="${pushSubscribed}">サーバ購読情報 登録済み</span>
+                <span th:unless="${pushSubscribed}">ブラウザ通知テストで動作確認できます</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- メイン設定フォーム（POST /settings） -->
+    <form th:action="@{/settings}" method="post">
+        <section class="card">
+            <div class="card-header">
+                <h2 class="card-title">1. 通知タイミング（複数選択可）</h2>
+                <div class="quick-actions">
+                    <button type="button" class="btn-chip" onclick="applyTimingPreset([24, 5, 1])">標準（24・5・1時間前）</button>
+                    <button type="button" class="btn-chip" onclick="applyTimingPreset([48, 24, 12, 5, 1])">余裕あり</button>
+                    <button type="button" class="btn-chip" onclick="applyTimingPreset([])">すべて解除</button>
+                </div>
+            </div>
+            <p class="card-desc">
+                課題の締め切りに対して、何回・何時間前にリマインド通知を送るかを選択してください（最低1つ以上の選択が必要です）。
+            </p>
+
+            <div class="timing-grid">
+                <label class="timing-option"
+                       th:each="entry : ${presetTimings}"
+                       th:for="'timing-' + ${entry.key}">
+                    <input type="checkbox"
+                           name="timings"
+                           th:id="'timing-' + ${entry.key}"
+                           th:value="${entry.key}"
+                           th:checked="${selectedTimings.contains(entry.key)}">
+                    <span th:text="${entry.value}">24時間前</span>
+                </label>
+            </div>
+
+            <div class="custom-timing-box">
+                <label for="customTiming">カスタム通知時間（任意・時間単位）</label>
+                <input type="text"
+                       id="customTiming"
+                       name="customTiming"
+                       class="input-control"
+                       th:value="${customTimingsText}"
+                       placeholder="例: 36, 6（1〜168時間前をカンマ区切りで複数指定できます）">
+                <p class="hint-text">
+                    1〜168 の整数で入力してください（カンマ区切りで複数指定可）。保存時に降順のカンマ区切り形式（例: <code>24,5,1</code>）へ正規化されます。
+                </p>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-header">
+                <h2 class="card-title">2. 科目ごとの通知 ON / OFF</h2>
+                <div class="quick-actions">
+                    <button type="button" class="btn-chip" onclick="toggleAllCourses(true)">全科目 ON</button>
+                    <button type="button" class="btn-chip" onclick="toggleAllCourses(false)">全科目 OFF</button>
+                </div>
+            </div>
+            <p class="card-desc">
+                取得済み課題の履修科目ごとに通知の有効・無効を切り替えられます。不要な科目は OFF にしてください。
+            </p>
+
+            <div th:if="${#lists.isEmpty(settings)}" class="empty-state">
+                まだ科目が登録されていません。下の「科目を手動追加」または「Gmail同期」から課題を取り込むと科目が表示されます。
+            </div>
+
+            <div th:unless="${#lists.isEmpty(settings)}" class="course-list">
+                <div class="course-row" th:each="setting : ${settings}">
+                    <div class="course-info">
+                        <span class="course-name" th:text="${setting.courseName}">ソフトウェア工学</span>
+                    </div>
+                    <div class="course-controls">
+                        <span class="status-badge"
+                              th:id="'badge-' + ${setting.settingId}"
+                              th:classappend="${setting.enabled} ? ' status-on' : ' status-off'"
+                              th:text="${setting.enabled} ? 'ON（通知する）' : 'OFF（通知しない）'">
+                            ON（通知する）
+                        </span>
+                        <label class="switch" th:title="${setting.courseName} + ' の通知切替'">
+                            <input type="checkbox"
+                                   class="course-toggle"
+                                   name="enabledSettingIds"
+                                   th:value="${setting.settingId}"
+                                   th:checked="${setting.enabled}"
+                                   th:attr="data-badge-id='badge-' + ${setting.settingId}"
+                                   onchange="updateCourseBadge(this)">
+                            <span class="slider"></span>
+                        </label>
+                        <button type="submit"
+                                th:attr="form='delete-course-' + ${setting.settingId}"
+                                class="btn-delete"
+                                onclick="return confirm('この科目の通知設定を削除しますか？');">
+                            削除
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-footer">
+                <a th:href="@{/tasks}" class="btn-secondary">&larr; 課題一覧に戻る</a>
+                <button type="submit" class="btn-primary">通知設定を保存する</button>
+            </div>
+        </section>
+    </form>
+
+    <!-- 科目削除用フォーム（ネスト回避のためメインフォーム外に配置） -->
+    <th:block th:each="setting : ${settings}">
+        <form th:id="'delete-course-' + ${setting.settingId}"
+              th:action="@{/settings/courses/{id}/delete(id=${setting.settingId})}"
+              method="post"
+              style="display:none;"></form>
+    </th:block>
+
+    <!-- 新しい科目の手動追加フォーム（POST /settings/courses） -->
+    <section class="card">
+        <div class="card-header">
+            <h2 class="card-title">3. 新しい科目を手動追加</h2>
+        </div>
+        <p class="card-desc">
+            まだ課題メールが届いていない科目でも、事前に通知対象として追加できます。
+        </p>
+        <form th:action="@{/settings/courses}" method="post" class="inline-form">
+            <input type="text"
+                   name="courseName"
+                   class="input-control"
+                   maxlength="100"
+                   required
+                   placeholder="科目名を入力（例: 分散システム特論）">
+            <button type="submit" class="btn-secondary">+ 科目を追加</button>
+        </form>
+    </section>
+
+    <!-- Web Push テスト通知セクション -->
+    <section class="card">
+        <div class="card-header">
+            <h2 class="card-title">4. Web Push 通知テスト（動作確認）</h2>
+        </div>
+        <p class="card-desc">
+            お使いのブラウザで通知が正しくポップアップ表示されるかテストします（設定したタイミングでの通知イメージを確認できます）。
+        </p>
+        <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center;">
+            <button type="button" class="btn-secondary" onclick="sendTestPushNotification()">
+                &#128276; Web Push テスト通知を送信
+            </button>
+            <a th:href="@{/history}" class="btn-secondary">通知履歴・自動送信テストへ &rarr;</a>
+        </div>
+    </section>
+</main>
+
+<div id="preview-toast" class="toast" role="status" aria-live="polite">
+    <div class="toast-title" id="toast-title">manaba 課題通知</div>
+    <div class="toast-body" id="toast-body"></div>
+</div>
+
+<script th:src="@{/js/push-client.js}"></script>
+<script>
+    function updateCourseBadge(checkbox) {
+        var badgeId = checkbox.getAttribute("data-badge-id");
+        var badge = document.getElementById(badgeId);
+        if (!badge) return;
+        if (checkbox.checked) {
+            badge.textContent = "ON（通知する）";
+            badge.classList.remove("status-off");
+            badge.classList.add("status-on");
+        } else {
+            badge.textContent = "OFF（通知しない）";
+            badge.classList.remove("status-on");
+            badge.classList.add("status-off");
+        }
+    }
+
+    function toggleAllCourses(enabled) {
+        var toggles = document.querySelectorAll(".course-toggle");
+        toggles.forEach(function (cb) {
+            cb.checked = enabled;
+            updateCourseBadge(cb);
+        });
+    }
+
+    function applyTimingPreset(hoursList) {
+        var checkboxes = document.querySelectorAll('input[name="timings"]');
+        checkboxes.forEach(function (cb) {
+            cb.checked = hoursList.indexOf(parseInt(cb.value, 10)) !== -1;
+        });
+        if (hoursList.length === 0) {
+            var customInput = document.getElementById("customTiming");
+            if (customInput) customInput.value = "";
+        }
+    }
+
+    function showToast(title, body) {
+        var toast = document.getElementById("preview-toast");
+        document.getElementById("toast-title").textContent = title;
+        document.getElementById("toast-body").textContent = body;
+        toast.classList.add("show");
+        setTimeout(function () {
+            toast.classList.remove("show");
+        }, 4500);
+    }
+
+    function refreshNotificationStatus() {
+        var statusEl = document.getElementById("push-permission-status");
+        if (!statusEl) return;
+        if (!("Notification" in window)) {
+            statusEl.textContent = "非対応ブラウザ";
+            return;
+        }
+        if (Notification.permission === "granted") {
+            statusEl.textContent = "許可済み (Granted)";
+        } else if (Notification.permission === "denied") {
+            statusEl.textContent = "ブロック中 (Denied)";
+        } else {
+            statusEl.textContent = "未設定 (Default)";
+        }
+    }
+
+    function requestPushPermission() {
+        if (!("Notification" in window)) {
+            showToast("通知非対応", "このブラウザは Notification API に対応していません。");
+            return;
+        }
+        Notification.requestPermission().then(function (permission) {
+            refreshNotificationStatus();
+            if (permission === "granted") {
+                showToast("通知を許可しました", "設定画面からテスト通知を送信できます。");
+                if (typeof subscribeUserToPush === "function") {
+                    try { subscribeUserToPush(); } catch (e) {}
+                }
+            } else {
+                showToast("通知が許可されませんでした", "ブラウザの設定から通知を許可してください。");
+            }
+        });
+    }
+
+    function sendTestPushNotification() {
+        var title = "【テスト通知】manaba 課題リマインダー";
+        var body = "ソフトウェア工学「詳細設計書レビュー」の締切まであと5時間です。";
+        showToast(title, body);
+
+        if (!("Notification" in window)) {
+            return;
+        }
+        if (Notification.permission === "granted") {
+            new Notification(title, { body: body });
+        } else if (Notification.permission !== "denied") {
+            Notification.requestPermission().then(function (permission) {
+                refreshNotificationStatus();
+                if (permission === "granted") {
+                    new Notification(title, { body: body });
+                }
+            });
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", refreshNotificationStatus);
+</script>
+</body>
+</html>
