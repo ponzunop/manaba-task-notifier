@@ -126,9 +126,21 @@ public class TaskController {
             model.addAttribute("successMessage", "Gmailから最新の小テスト・課題情報を同期しました");
         }
 
+        Integer lastSyncScannedCount = resolveIntegerAttr(session, "lastSyncScannedCount");
+        Integer lastSyncSyncedCount = resolveIntegerAttr(session, "lastSyncSyncedCount");
+        List<String> lastSyncSkippedSamples = resolveStringListAttr(session, "lastSyncSkippedSamples");
+        boolean isGasBrowserAuth = user != null
+                && "GAS_BROWSER".equals(user.getAuthType())
+                && user.getGasUrl() != null
+                && !user.getGasUrl().isBlank();
+
         model.addAttribute("userId", userId);
         model.addAttribute("userDisplayName", userDisplayName);
         model.addAttribute("userEmail", userEmail);
+        model.addAttribute("isGasBrowserAuth", isGasBrowserAuth);
+        model.addAttribute("lastSyncScannedCount", lastSyncScannedCount);
+        model.addAttribute("lastSyncSyncedCount", lastSyncSyncedCount);
+        model.addAttribute("lastSyncSkippedSamples", lastSyncSkippedSamples);
         model.addAttribute("tasks", filteredTasks);
         model.addAttribute("courses", courses);
         model.addAttribute("totalCount", allTasks.size());
@@ -340,6 +352,38 @@ public class TaskController {
             }
         }
         return userId;
+    }
+
+    private Integer resolveIntegerAttr(HttpSession session, String name) {
+        Object attr = session.getAttribute(name);
+        if (attr instanceof Number num) {
+            return num.intValue();
+        }
+        if (attr instanceof String str && !str.isBlank()) {
+            try {
+                return Integer.parseInt(str.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private List<String> resolveStringListAttr(HttpSession session, String name) {
+        Object attr = session.getAttribute(name);
+        if (!(attr instanceof List<?> rawList) || rawList.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (Object item : rawList) {
+            if (item != null) {
+                String text = item.toString();
+                if (!text.isBlank()) {
+                    result.add(text);
+                }
+            }
+        }
+        return result;
     }
 
     private static String normalizeTaskType(String taskType) {
