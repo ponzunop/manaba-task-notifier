@@ -4,10 +4,10 @@ import com.example.manabanotifier.entity.Task;
 import com.example.manabanotifier.entity.User;
 import com.example.manabanotifier.repository.TaskRepository;
 import com.example.manabanotifier.repository.UserRepository;
+import com.example.manabanotifier.security.SecurityUtils;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -58,10 +58,9 @@ public class TaskController {
             @RequestParam(value = "q", required = false, defaultValue = "") String keyword,
             @RequestParam(value = "synced", required = false) String synced,
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             Model model) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -167,10 +166,9 @@ public class TaskController {
             @RequestParam(value = "toggle", required = false, defaultValue = "false") boolean toggle,
             @RequestParam(value = "filter", required = false, defaultValue = "all") String filter,
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -212,10 +210,9 @@ public class TaskController {
             @PathVariable("taskId") Long taskId,
             @RequestParam(value = "filter", required = false, defaultValue = "all") String filter,
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -254,10 +251,9 @@ public class TaskController {
             @RequestParam("deadline") String deadlineStr,
             @RequestParam(value = "taskUrl", required = false) String taskUrl,
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -266,10 +262,12 @@ public class TaskController {
         String trimmedTitle = title != null ? title.trim() : "";
         String resolvedType = normalizeTaskType(taskType);
 
-        if (trimmedCourse.isEmpty() || trimmedTitle.isEmpty() || deadlineStr == null || deadlineStr.isBlank()) {
+        if (trimmedCourse.isEmpty() || trimmedCourse.length() > 150
+                || trimmedTitle.isEmpty() || trimmedTitle.length() > 200
+                || deadlineStr == null || deadlineStr.isBlank()) {
             redirectAttributes.addFlashAttribute(
                     "errorMessage",
-                    "登録に失敗しました。科目名・小テスト/課題名・締切日時を入力してください");
+                    "登録に失敗しました。科目名（150文字以内）・小テスト/課題名（200文字以内）・締切日時を正しく入力してください");
             return "redirect:/tasks";
         }
 
@@ -326,18 +324,16 @@ public class TaskController {
         return "redirect:/tasks";
     }
 
-    private String resolveUserId(HttpSession session, String cookieUserId) {
+    private String resolveUserId(HttpSession session) {
+        if (session == null) {
+            return null;
+        }
         Object attr = session.getAttribute("user_id");
         if (attr != null) {
             String sessionUserId = attr.toString().trim();
             if (!sessionUserId.isEmpty()) {
                 return sessionUserId;
             }
-        }
-        if (cookieUserId != null && !cookieUserId.trim().isEmpty()) {
-            String trimmed = cookieUserId.trim();
-            session.setAttribute("user_id", trimmed);
-            return trimmed;
         }
         return null;
     }
@@ -390,18 +386,15 @@ public class TaskController {
         if (taskType == null || taskType.isBlank()) {
             return "小テスト";
         }
-        return taskType.trim();
+        String trimmed = taskType.trim();
+        return switch (trimmed) {
+            case "小テスト", "アンケート", "レポート", "課題" -> trimmed;
+            default -> "小テスト";
+        };
     }
 
     private static String sanitizeUrl(String url) {
-        if (url == null) {
-            return null;
-        }
-        String trimmed = url.trim();
-        if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
-            return trimmed;
-        }
-        return null;
+        return SecurityUtils.sanitizeHttpUrl(url, 500);
     }
 
     private String normalizeFilter(String filter) {

@@ -6,6 +6,7 @@ import com.example.manabanotifier.entity.User;
 import com.example.manabanotifier.repository.NotificationSettingRepository;
 import com.example.manabanotifier.repository.TaskRepository;
 import com.example.manabanotifier.repository.UserRepository;
+import com.example.manabanotifier.security.SecurityUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -27,16 +28,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,6 +55,9 @@ public class TaskFetchService {
 
     private static final String DEFAULT_NOTIFY_TIMINGS = "24,5,1";
     private static final int MAX_SKIPPED_SAMPLES = 5;
+    private static final int MAX_IMPORT_PAYLOAD_CHARS = 2 * 1024 * 1024;
+    private static final int MAX_IMPORT_EMAILS = 200;
+    private static final int MAX_GAS_REDIRECTS = 5;
     private static final Path OAUTH_CONFIG_PATH = Paths.get("config", "google-oauth.properties");
     private static final String GMAIL_SEARCH_QUERY =
             "from:do-not-reply@manaba.jp OR manaba OR (小テスト (受付終了 OR 締切 OR コース))";
@@ -99,6 +106,7 @@ public class TaskFetchService {
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final HttpClient noRedirectHttpClient;
 
     @Value("${google.oauth.client-id:}")
     private String configuredClientId;
@@ -122,9 +130,10 @@ public class TaskFetchService {
         this.userRepository = userRepository;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(15))
                 .build();
+        this.noRedirectHttpClient = this.httpClient;
     }
 
     @PostConstruct
@@ -165,6 +174,14 @@ public class TaskFetchService {
         props.setProperty("google.oauth.client-secret", trimmedSecret);
         try (OutputStream out = Files.newOutputStream(OAUTH_CONFIG_PATH)) {
             props.store(out, "Local Google OAuth 2.0 Credentials (ignored by git)");
+        }
+        try {
+            Set<PosixFilePermission> ownerOnly = EnumSet.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE);
+            Files.setPosixFilePermissions(OAUTH_CONFIG_PATH, ownerOnly);
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Non-POSIX filesystems
         }
 
         this.dynamicClientId = trimmedId;
@@ -522,11 +539,15 @@ public class TaskFetchService {
         if (jsonPayload == null || jsonPayload.isBlank()) {
             return new ImportResult(null, null, 0, 0, List.of());
         }
+        if (jsonPayload.length() > MAX_IMPORT_PAYLOAD_CHARS) {
+            throw new GmailFetchException("送信されたデータサイズが大きすぎます（上限 2MB）。", false);
+        }
 
         try {
             JsonNode root = objectMapper.readTree(jsonPayload.trim());
             String detectedEmail = root.isObject() ? blankToNull(root.path("email").asText(null)) : null;
-            String detectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+            String rawDetectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+            String detectedGasUrl = SecurityUtils.isValidGoogleAppsScriptUrl(rawDetectedGasUrl) ? rawDetectedGasUrl : null;
 
             if (root.isObject() && root.has("subject") && root.has("body") && !root.has("emails")) {
                 String subject = root.path("subject").asText("");
@@ -551,7 +572,7 @@ public class TaskFetchService {
                 return new ImportResult(detectedEmail, detectedGasUrl, 0, 0, List.of());
             }
 
-            int scanned = emailsNode.size();
+            int scanned = Math.min(emailsNode.size(), MAX_IMPORT_EMAILS);
             int synced = 0;
             List<String> skippedSamples = new ArrayList<>();
 
@@ -559,7 +580,12 @@ public class TaskFetchService {
                 purgeNonAssignmentFalsePositives(userId);
             }
 
+            int processed = 0;
             for (JsonNode item : emailsNode) {
+                if (processed >= MAX_IMPORT_EMAILS) {
+                    break;
+                }
+                processed++;
                 String subject = item.path("subject").asText("");
                 String from = item.path("from").asText("");
                 String body = item.path("body").asText("");
@@ -581,7 +607,7 @@ public class TaskFetchService {
             return new ImportResult(detectedEmail, detectedGasUrl, scanned, synced, skippedSamples);
         } catch (IOException ex) {
             log.warn("GAS JSON ペイロードの解析に失敗しました: {}", ex.getMessage());
-            throw new GmailFetchException("GAS から受信した JSON の形式が正しくありません: " + ex.getMessage(), false, ex);
+            throw new GmailFetchException("GAS から受信した JSON の形式が正しくありません。", false, ex);
         }
     }
 
@@ -611,13 +637,14 @@ public class TaskFetchService {
      * JSON ペイロードから email / gasUrl メタデータのみを安全に抽出する（ログインユーザー特定用）。
      */
     public ImportResult peekGasPayloadMetadata(String jsonPayload) {
-        if (jsonPayload == null || jsonPayload.isBlank()) {
+        if (jsonPayload == null || jsonPayload.isBlank() || jsonPayload.length() > MAX_IMPORT_PAYLOAD_CHARS) {
             return new ImportResult(null, null, 0, 0, List.of());
         }
         try {
             JsonNode root = objectMapper.readTree(jsonPayload.trim());
             String detectedEmail = root.isObject() ? blankToNull(root.path("email").asText(null)) : null;
-            String detectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+            String rawDetectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+            String detectedGasUrl = SecurityUtils.isValidGoogleAppsScriptUrl(rawDetectedGasUrl) ? rawDetectedGasUrl : null;
             return new ImportResult(detectedEmail, detectedGasUrl, 0, 0, List.of());
         } catch (IOException ex) {
             return new ImportResult(null, null, 0, 0, List.of());
@@ -706,6 +733,45 @@ public class TaskFetchService {
     }
 
     /**
+     * Gmail API アクセストークンの実際の所有者メールアドレスを Google API で検証・取得する（なりすましログイン防止）。
+     */
+    public String verifyGmailApiProfileEmail(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new GmailFetchException("Gmail API アクセストークンが空です。", true);
+        }
+        String trimmedToken = accessToken.trim();
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create("https://gmail.googleapis.com/gmail/v1/users/me/profile"))
+                    .header("Authorization", "Bearer " + trimmedToken)
+                    .timeout(Duration.ofSeconds(15))
+                    .GET()
+                    .build();
+            HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (res.statusCode() == 401 || res.statusCode() == 403) {
+                throw new GmailFetchException(
+                        "Gmail API アクセストークンの検証に失敗しました（HTTP " + res.statusCode() + "）。有効なトークンを入力してください。",
+                        true);
+            }
+            if (res.statusCode() < 200 || res.statusCode() >= 300) {
+                throw new GmailFetchException("Gmail プロフィールの確認に失敗しました。", false);
+            }
+            JsonNode json = objectMapper.readTree(res.body());
+            String email = json.path("emailAddress").asText("").trim().toLowerCase(Locale.ROOT);
+            if (email.isBlank() || !email.contains("@")) {
+                throw new GmailFetchException("トークンからメールアドレスを取得できませんでした。", true);
+            }
+            return email;
+        } catch (GmailFetchException ex) {
+            throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new GmailFetchException("Gmail API 検証通信が中断されました。", false, ex);
+        } catch (IOException ex) {
+            throw new GmailFetchException("Gmail API への検証通信に失敗しました。", false, ex);
+        }
+    }
+
+    /**
      * 本物の Gmail REST API (gmail.googleapis.com) から manaba 小テスト・課題メールを取得・保存する。
      */
     @Transactional
@@ -749,7 +815,7 @@ public class TaskFetchService {
             int syncedCount = 0;
             for (JsonNode msgRef : messagesNode) {
                 String msgId = msgRef.path("id").asText(null);
-                if (msgId == null || msgId.isBlank()) {
+                if (!SecurityUtils.isValidGmailMessageId(msgId)) {
                     continue;
                 }
                 try {
@@ -817,8 +883,10 @@ public class TaskFetchService {
         }
 
         String trimmedUrl = gasUrl.trim();
-        if (!trimmedUrl.startsWith("https://") && !trimmedUrl.startsWith("http://")) {
-            throw new GmailFetchException("GAS ウェブアプリ URL は https:// から始まる有効な URL を入力してください。", false);
+        if (!SecurityUtils.isValidGoogleAppsScriptUrl(trimmedUrl)) {
+            throw new GmailFetchException(
+                    "セキュリティ保護のため、Google Apps Script の公式ウェブアプリ URL（https://script.google.com/.../exec）のみ接続可能です。",
+                    false);
         }
 
         String requestUrl = trimmedUrl;
@@ -828,13 +896,7 @@ public class TaskFetchService {
         }
 
         try {
-            HttpRequest req = HttpRequest.newBuilder(URI.create(requestUrl))
-                    .header("Accept", "application/json")
-                    .timeout(Duration.ofSeconds(30))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> res = sendGasGetWithStrictRedirects(URI.create(requestUrl));
             String bodyText = res.body() != null ? res.body().trim() : "";
 
             if (isHtmlResponse(bodyText) || res.statusCode() == 401 || res.statusCode() == 403) {
@@ -873,13 +935,47 @@ public class TaskFetchService {
         } catch (GmailFetchException ex) {
             throw ex;
         } catch (IllegalArgumentException ex) {
-            throw new GmailFetchException("GAS ウェブアプリ URL の形式が正しくありません: " + ex.getMessage(), false, ex);
+            throw new GmailFetchException("GAS ウェブアプリ URL の形式が正しくありません。", false, ex);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new GmailFetchException("GAS ウェブアプリへの通信が中断されました。", false, ex);
         } catch (IOException ex) {
-            throw new GmailFetchException("GAS ウェブアプリへの通信または JSON 解析に失敗しました: " + ex.getMessage(), false, ex);
+            log.warn("GAS ウェブアプリ通信エラー: {}", ex.getMessage());
+            throw new GmailFetchException("GAS ウェブアプリへの通信または JSON 解析に失敗しました。", false, ex);
         }
+    }
+
+    /**
+     * SSRF 防止のため、リダイレクト先が Google Apps Script 公式ドメインの場合のみ手動追従する。
+     */
+    private HttpResponse<String> sendGasGetWithStrictRedirects(URI initialUri) throws IOException, InterruptedException {
+        URI current = initialUri;
+        for (int hop = 0; hop <= MAX_GAS_REDIRECTS; hop++) {
+            HttpRequest req = HttpRequest.newBuilder(current)
+                    .header("Accept", "application/json")
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+            HttpResponse<String> res = noRedirectHttpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            int status = res.statusCode();
+            if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                Optional<String> locationOpt = res.headers().firstValue("Location");
+                if (locationOpt.isEmpty()) {
+                    return res;
+                }
+                URI next = current.resolve(locationOpt.get());
+                if (!SecurityUtils.isAllowedGasRedirectTarget(next)) {
+                    throw new GmailFetchException(
+                            "GAS ウェブアプリが Google ログイン画面または許可外ドメインへリダイレクトされました。"
+                                    + "大学アカウントでは「ブラウザ経由 GAS 連携（自分のみ公開）」をご利用ください。",
+                            true);
+                }
+                current = next;
+                continue;
+            }
+            return res;
+        }
+        throw new GmailFetchException("GAS ウェブアプリのリダイレクト回数が上限を超えました。", false);
     }
 
     /**
@@ -887,7 +983,8 @@ public class TaskFetchService {
      */
     @Transactional
     public int importFromRawEmailText(String userId, String rawText) {
-        if (userId == null || userId.isBlank() || rawText == null || rawText.isBlank()) {
+        if (userId == null || userId.isBlank() || rawText == null || rawText.isBlank()
+                || rawText.length() > MAX_IMPORT_PAYLOAD_CHARS) {
             return 0;
         }
 
@@ -902,8 +999,13 @@ public class TaskFetchService {
 
         List<String> blocks = splitRawEmailBlocks(rawText);
         int imported = 0;
+        int processed = 0;
 
         for (String block : blocks) {
+            if (processed >= MAX_IMPORT_EMAILS) {
+                break;
+            }
+            processed++;
             String subject = extractFirstGroup(SUBJECT_LINE_PATTERN, block);
             Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, block);
             if (parsedOpt.isPresent()) {
@@ -1249,13 +1351,19 @@ public class TaskFetchService {
     private String extractTaskUrl(String body) {
         Matcher pcMatcher = PC_URL_PATTERN.matcher(body);
         if (pcMatcher.find()) {
-            return pcMatcher.group(1).trim();
+            String sanitized = SecurityUtils.sanitizeHttpUrl(pcMatcher.group(1), 500);
+            if (sanitized != null) {
+                return sanitized;
+            }
         }
         Matcher anyMatcher = ANY_URL_PATTERN.matcher(body);
         while (anyMatcher.find()) {
             String url = anyMatcher.group(1).trim();
             if (url.contains("manaba") || url.contains("course") || url.contains("query")) {
-                return url;
+                String sanitized = SecurityUtils.sanitizeHttpUrl(url, 500);
+                if (sanitized != null) {
+                    return sanitized;
+                }
             }
         }
         return null;

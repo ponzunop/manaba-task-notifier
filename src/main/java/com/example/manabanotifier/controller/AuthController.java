@@ -2,6 +2,8 @@ package com.example.manabanotifier.controller;
 
 import com.example.manabanotifier.entity.User;
 import com.example.manabanotifier.repository.UserRepository;
+import com.example.manabanotifier.security.SecurityFilter;
+import com.example.manabanotifier.security.SecurityUtils;
 import com.example.manabanotifier.service.TaskFetchService;
 import com.example.manabanotifier.service.TaskFetchService.GasFetchResult;
 import com.example.manabanotifier.service.TaskFetchService.GmailFetchException;
@@ -10,6 +12,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
@@ -18,12 +21,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
@@ -84,11 +84,10 @@ public class AuthController {
             @RequestParam(name = "oauth_unconfigured", required = false) String oauthUnconfigured,
             @RequestParam(name = "oauth_saved", required = false) String oauthSaved,
             HttpSession session,
-            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
             HttpServletResponse response,
             Model model) {
 
-        String authenticatedUserId = resolveAuthenticatedUserId(session, cookieUserId);
+        String authenticatedUserId = resolveAuthenticatedUserId(session);
         if (authenticatedUserId != null) {
             Optional<User> userOpt = userRepository.findById(authenticatedUserId);
             if (userOpt.isPresent()) {
@@ -147,8 +146,9 @@ public class AuthController {
         String trimmedUrl = gasUrl != null ? gasUrl.trim() : "";
         String trimmedEmail = (email != null && !email.isBlank()) ? email.trim().toLowerCase() : null;
 
-        if (trimmedUrl.isBlank() || (!trimmedUrl.startsWith("https://") && !trimmedUrl.startsWith("http://"))) {
-            model.addAttribute("errorMessage", "有効な GAS ウェブアプリ URL（https://script.google.com/macros/s/.../exec）を入力してください。");
+        if (!SecurityUtils.isValidGoogleAppsScriptUrl(trimmedUrl)) {
+            model.addAttribute("errorMessage",
+                    "セキュリティ保護のため、Google Apps Script 公式のウェブアプリ URL（https://script.google.com/.../exec）のみ指定できます。");
             model.addAttribute("attemptedGasUrl", trimmedUrl);
             model.addAttribute("attemptedEmail", trimmedEmail);
             populateLoginModel(model);
@@ -172,8 +172,8 @@ public class AuthController {
     @PostMapping("/auth/gas-callback")
     public String handleGasBrowserCallback(
             @RequestParam(required = false) String payload,
+            HttpServletRequest request,
             HttpSession session,
-            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes,
             Model model) {
@@ -183,14 +183,14 @@ public class AuthController {
         }
 
         ImportResult meta = taskFetchService.peekGasPayloadMetadata(payload);
-        User existingSessionUser = resolveExistingUser(session, cookieUserId);
+        User existingSessionUser = resolveExistingUser(session);
 
         String pendingEmail = getSessionString(session, SESSION_PENDING_EMAIL);
         String pendingGasUrl = getSessionString(session, SESSION_PENDING_GAS_URL);
 
         String resolvedGasUrl = firstNonBlank(
                 meta.getDetectedGasUrl(),
-                pendingGasUrl,
+                SecurityUtils.isValidGoogleAppsScriptUrl(pendingGasUrl) ? pendingGasUrl : null,
                 existingSessionUser != null ? existingSessionUser.getGasUrl() : null
         );
         String resolvedEmail = firstNonBlank(
@@ -207,7 +207,7 @@ public class AuthController {
 
         try {
             User user = upsertUser(userId, resolvedEmail, resolvedName, null, null, resolvedGasUrl, null, "GAS_BROWSER");
-            establishLoginSession(user, session, response);
+            establishLoginSession(user, request, session, response);
 
             ImportResult result = taskFetchService.importFromGasPayload(user.getUserId(), payload);
             saveSyncDiagnostics(session, result);
@@ -242,6 +242,7 @@ public class AuthController {
             @RequestParam String jsonPayload,
             @RequestParam(required = false) String email,
             @RequestParam(required = false) String displayName,
+            HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes,
@@ -259,6 +260,13 @@ public class AuthController {
                 meta.getDetectedEmail(),
                 "gas-json-" + shortHash(jsonPayload) + "@manaba-sync.local"
         );
+        if (isProtectedAccountTakeover(resolvedEmail, session)) {
+            model.addAttribute("errorMessage",
+                    "このメールアドレスは既に Google 連携アカウントとして登録されています。なりすまし防止のため、方法①（GAS連携）または方法②（Google OAuth 2.0）からログインしてください。");
+            model.addAttribute("attemptedEmail", resolvedEmail);
+            populateLoginModel(model);
+            return "login";
+        }
         String resolvedName = (displayName != null && !displayName.isBlank())
                 ? displayName.trim()
                 : (resolvedEmail.contains("@") ? resolvedEmail.substring(0, resolvedEmail.indexOf('@')) : resolvedEmail);
@@ -266,7 +274,7 @@ public class AuthController {
 
         try {
             User user = upsertUser(userId, resolvedEmail, resolvedName, null, null, meta.getDetectedGasUrl(), null, "GAS_JSON");
-            establishLoginSession(user, session, response);
+            establishLoginSession(user, request, session, response);
 
             ImportResult result = taskFetchService.importFromGasPayload(user.getUserId(), jsonPayload);
             saveSyncDiagnostics(session, result);
@@ -290,19 +298,33 @@ public class AuthController {
     }
 
     /**
-     * 画面から Google OAuth 2.0 クライアントID / Secret を保存する（サーバ再起動不要）。
+     * 画面から Google OAuth 2.0 クライアントID / Secret を保存する（ローカルホスト限定・サーバ再起動不要）。
      */
     @PostMapping("/auth/oauth-config")
     public String saveOAuthConfig(
             @RequestParam String clientId,
             @RequestParam String clientSecret,
+            HttpServletRequest request,
+            HttpSession session,
             Model model) {
+
+        if (!SecurityUtils.isLoopbackAddress(request.getRemoteAddr())) {
+            model.addAttribute("errorMessage", "セキュリティ保護のため、OAuth 設定の変更はローカル環境（localhost）からのみ許可されています。");
+            populateLoginModel(model);
+            return "login";
+        }
+        if (taskFetchService.isOAuthConfigured() && resolveAuthenticatedUserId(session) == null) {
+            model.addAttribute("errorMessage", "既に OAuth 設定が登録済みです。上書きするにはログインした状態で変更するか、サーバ設定ファイルを直接更新してください。");
+            model.addAttribute("openOAuthSetup", true);
+            populateLoginModel(model);
+            return "login";
+        }
 
         try {
             taskFetchService.saveOAuthConfig(clientId, clientSecret);
             return "redirect:/login?oauth_saved=true";
         } catch (IllegalArgumentException | IOException ex) {
-            model.addAttribute("errorMessage", "OAuth 設定の保存に失敗しました: " + ex.getMessage());
+            model.addAttribute("errorMessage", "OAuth 設定の保存に失敗しました。入力値を確認してください。");
             model.addAttribute("openOAuthSetup", true);
             populateLoginModel(model);
             return "login";
@@ -343,6 +365,7 @@ public class AuthController {
             @RequestParam(required = false) String code,
             @RequestParam(required = false) String error,
             @RequestParam(required = false) String state,
+            HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes) {
@@ -355,8 +378,10 @@ public class AuthController {
 
         Object expectedState = session.getAttribute(SESSION_OAUTH_STATE);
         session.removeAttribute(SESSION_OAUTH_STATE);
-        if (expectedState != null && state != null && !expectedState.toString().equals(state)) {
-            log.warn("Google OAuth state 不一致");
+        if (!(expectedState instanceof String expectedStr) || expectedStr.isBlank()
+                || state == null || state.isBlank()
+                || !SecurityUtils.constantTimeEquals(expectedStr, state)) {
+            log.warn("Google OAuth state 検証失敗（欠落または不一致）");
             return "redirect:/login?error=oauth_failed";
         }
 
@@ -376,7 +401,7 @@ public class AuthController {
             HttpResponse<String> tokenRes = httpClient.send(
                     tokenReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (tokenRes.statusCode() < 200 || tokenRes.statusCode() >= 300) {
-                log.error("Google token exchange failed: status={}, body={}", tokenRes.statusCode(), tokenRes.body());
+                log.error("Google token exchange failed: status={}", tokenRes.statusCode());
                 return "redirect:/login?error=oauth_failed";
             }
 
@@ -411,7 +436,7 @@ public class AuthController {
             String userId = generateUserId(email);
             int syncedCount = taskFetchService.fetchTasksFromGmailApi(userId, accessToken);
             User user = upsertUser(userId, email, name, accessToken, refreshToken, null, null, "OAUTH2");
-            establishLoginSession(user, session, response);
+            establishLoginSession(user, request, session, response);
 
             redirectAttributes.addFlashAttribute("successMessage",
                     "Google OAuth 2.0（" + email + "）で連携し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
@@ -420,54 +445,52 @@ public class AuthController {
             Thread.currentThread().interrupt();
             return "redirect:/login?error=oauth_failed";
         } catch (IOException | GmailFetchException ex) {
-            log.error("Google OAuth 連携エラー: {}", ex.getMessage(), ex);
+            log.error("Google OAuth 連携エラー: {}", ex.getMessage());
             return "redirect:/login?error=oauth_failed";
         }
     }
 
     /**
      * 方法②-B：OAuth 2.0 Playground 等で取得した Gmail API アクセストークン（ya29...）で即時連携する。
+     * トークン所有者のメールアドレスを Google Gmail API (/users/me/profile) で直接検証する（なりすまし防止）。
      */
     @PostMapping("/auth/oauth-token")
     public String loginWithOAuthToken(
-            @RequestParam String email,
+            @RequestParam(required = false) String email,
             @RequestParam String accessToken,
             @RequestParam(required = false) String displayName,
+            HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes,
             Model model) {
 
-        if (email == null || email.isBlank() || !email.contains("@")) {
-            model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
-            populateLoginModel(model);
-            return "login";
-        }
         if (accessToken == null || accessToken.isBlank()) {
             model.addAttribute("errorMessage", "Gmail API アクセストークンを入力してください。");
-            model.addAttribute("attemptedEmail", email.trim());
+            model.addAttribute("attemptedEmail", email != null ? email.trim() : "");
             populateLoginModel(model);
             return "login";
         }
 
-        String trimmedEmail = email.trim().toLowerCase();
         String trimmedToken = accessToken.trim();
-        String resolvedName = (displayName != null && !displayName.isBlank())
-                ? displayName.trim()
-                : trimmedEmail.substring(0, trimmedEmail.indexOf('@'));
-        String userId = generateUserId(trimmedEmail);
-
         try {
+            // 入力されたメールアドレスを信用せず、トークン本来の所有者メールアドレスを Google API で検証する
+            String verifiedEmail = taskFetchService.verifyGmailApiProfileEmail(trimmedToken);
+            String resolvedName = (displayName != null && !displayName.isBlank())
+                    ? displayName.trim()
+                    : verifiedEmail.substring(0, verifiedEmail.indexOf('@'));
+            String userId = generateUserId(verifiedEmail);
+
             int syncedCount = taskFetchService.fetchTasksFromGmailApi(userId, trimmedToken);
-            User user = upsertUser(userId, trimmedEmail, resolvedName, trimmedToken, null, null, null, "OAUTH2");
-            establishLoginSession(user, session, response);
+            User user = upsertUser(userId, verifiedEmail, resolvedName, trimmedToken, null, null, null, "OAUTH2");
+            establishLoginSession(user, request, session, response);
 
             redirectAttributes.addFlashAttribute("successMessage",
-                    "Gmail API（" + trimmedEmail + "）に接続し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
+                    "Gmail API（" + verifiedEmail + "）に接続し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
             return "redirect:/tasks?synced=true";
         } catch (GmailFetchException ex) {
             model.addAttribute("errorMessage", ex.getMessage());
-            model.addAttribute("attemptedEmail", trimmedEmail);
+            model.addAttribute("attemptedEmail", email != null ? email.trim() : "");
             model.addAttribute("openOAuthSetup", true);
             populateLoginModel(model);
             return "login";
@@ -483,6 +506,7 @@ public class AuthController {
             @RequestParam(required = false, defaultValue = "manaba-sync-2026") String gasToken,
             @RequestParam(required = false) String email,
             @RequestParam(required = false) String displayName,
+            HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes,
@@ -509,7 +533,7 @@ public class AuthController {
                     trimmedToken,
                     "GAS"
             );
-            establishLoginSession(user, session, response);
+            establishLoginSession(user, request, session, response);
 
             redirectAttributes.addFlashAttribute("successMessage",
                     "GAS ウェブアプリ（" + resolvedEmail + "）から "
@@ -526,30 +550,40 @@ public class AuthController {
 
     /**
      * メール連携なしでログイン（メールアドレスのみ入力・パスワード不要）。
+     * 既存の Google / GAS 連携アカウントへのなりすましログインは拒否する。
      */
     @PostMapping("/auth/login")
     public String loginWithoutGmail(
             @RequestParam String email,
             @RequestParam(required = false) String displayName,
+            HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
             RedirectAttributes redirectAttributes,
             Model model) {
 
-        if (email == null || email.isBlank() || !email.contains("@")) {
+        if (email == null || email.isBlank() || !email.contains("@") || email.trim().length() > 254) {
             model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
             populateLoginModel(model);
             return "login";
         }
 
         String trimmedEmail = email.trim().toLowerCase();
+        if (isProtectedAccountTakeover(trimmedEmail, session)) {
+            model.addAttribute("errorMessage",
+                    "このメールアドレスは既に Google / GAS 連携アカウントとして登録されています。なりすまし防止のため、方法①（GAS連携）または方法②（Google OAuth 2.0）からログインしてください。");
+            model.addAttribute("attemptedEmail", trimmedEmail);
+            populateLoginModel(model);
+            return "login";
+        }
+
         String resolvedName = (displayName != null && !displayName.isBlank())
                 ? displayName.trim()
                 : trimmedEmail.substring(0, trimmedEmail.indexOf('@'));
         String userId = generateUserId(trimmedEmail);
 
         User user = upsertUser(userId, trimmedEmail, resolvedName, null, null, null, null, "MANUAL");
-        establishLoginSession(user, session, response);
+        establishLoginSession(user, request, session, response);
 
         redirectAttributes.addFlashAttribute("infoMessage",
                 "ログインしました（" + trimmedEmail + "）。「manaba通知メール / GAS JSON を貼り付けて追加」または手動追加から小テストを登録できます。");
@@ -565,10 +599,9 @@ public class AuthController {
             @RequestParam(required = false) String emailText,
             @RequestParam(required = false) String rawEmailText,
             HttpSession session,
-            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveAuthenticatedUserId(session, cookieUserId);
+        String userId = resolveAuthenticatedUserId(session);
         if (userId == null || userRepository.findById(userId).isEmpty()) {
             return "redirect:/login";
         }
@@ -619,10 +652,9 @@ public class AuthController {
     @ResponseBody
     public ResponseEntity<Map<String, String>> subscribePush(
             @RequestBody(required = false) Map<String, Object> payload,
-            HttpSession session,
-            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId) {
+            HttpSession session) {
 
-        String userId = resolveAuthenticatedUserId(session, cookieUserId);
+        String userId = resolveAuthenticatedUserId(session);
         if (userId == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("status", "error", "message", "Not authenticated"));
@@ -641,18 +673,26 @@ public class AuthController {
         if (payload != null) {
             Object rawEndpoint = payload.get("endpoint");
             if (rawEndpoint != null && !String.valueOf(rawEndpoint).isBlank()) {
-                endpoint = String.valueOf(rawEndpoint);
+                String candidate = String.valueOf(rawEndpoint).trim();
+                if (candidate.length() <= 500
+                        && (candidate.startsWith("https://") || candidate.startsWith("browser-notification://"))) {
+                    endpoint = candidate;
+                }
             }
             Object rawKeys = payload.get("keys");
             if (rawKeys != null) {
+                String serialized;
                 if (rawKeys instanceof String strKeys) {
-                    keysJson = strKeys;
+                    serialized = strKeys;
                 } else {
                     try {
-                        keysJson = objectMapper.writeValueAsString(rawKeys);
+                        serialized = objectMapper.writeValueAsString(rawKeys);
                     } catch (JsonProcessingException e) {
-                        keysJson = String.valueOf(rawKeys);
+                        serialized = "{}";
                     }
+                }
+                if (serialized.length() <= 2000) {
+                    keysJson = serialized;
                 }
             }
         }
@@ -670,10 +710,9 @@ public class AuthController {
     @PostMapping("/auth/fetch-tasks")
     public String fetchTasksManually(
             HttpSession session,
-            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveAuthenticatedUserId(session, cookieUserId);
+        String userId = resolveAuthenticatedUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -684,7 +723,7 @@ public class AuthController {
 
         User user = userOpt.get();
         if ("GAS_BROWSER".equalsIgnoreCase(user.getAuthType())
-                && user.getGasUrl() != null && !user.getGasUrl().isBlank()) {
+                && SecurityUtils.isValidGoogleAppsScriptUrl(user.getGasUrl())) {
             session.setAttribute(SESSION_PENDING_GAS_URL, user.getGasUrl());
             if (user.getEmail() != null) {
                 session.setAttribute(SESSION_PENDING_EMAIL, user.getEmail());
@@ -709,9 +748,9 @@ public class AuthController {
     }
 
     /**
-     * ログアウト処理（セッションおよび Cookie を破棄）。
+     * ログアウト処理（CSRF 対策のため POST のみ受付。セッションおよび旧 Cookie を破棄）。
      */
-    @RequestMapping(value = "/auth/logout", method = {RequestMethod.GET, RequestMethod.POST})
+    @PostMapping("/auth/logout")
     public String logout(HttpSession session, HttpServletResponse response) {
         if (session != null) {
             session.invalidate();
@@ -748,12 +787,31 @@ public class AuthController {
         model.addAttribute("oauthClientId", taskFetchService.getOAuthClientId());
     }
 
-    private User resolveExistingUser(HttpSession session, String cookieUserId) {
-        String userId = resolveAuthenticatedUserId(session, cookieUserId);
+    private User resolveExistingUser(HttpSession session) {
+        String userId = resolveAuthenticatedUserId(session);
         if (userId == null) {
             return null;
         }
         return userRepository.findById(userId).orElse(null);
+    }
+
+    private boolean isProtectedAccountTakeover(String email, HttpSession session) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        Optional<User> existingOpt = userRepository.findByEmail(email.trim().toLowerCase());
+        if (existingOpt.isEmpty()) {
+            return false;
+        }
+        User existing = existingOpt.get();
+        String currentUserId = resolveAuthenticatedUserId(session);
+        if (currentUserId != null && currentUserId.equals(existing.getUserId())) {
+            return false;
+        }
+        String authType = existing.getAuthType();
+        return "OAUTH2".equalsIgnoreCase(authType)
+                || "GAS_BROWSER".equalsIgnoreCase(authType)
+                || "GAS".equalsIgnoreCase(authType);
     }
 
     private String getSessionString(HttpSession session, String key) {
@@ -819,15 +877,22 @@ public class AuthController {
         return userRepository.save(user);
     }
 
-    private void establishLoginSession(User user, HttpSession session, HttpServletResponse response) {
+    private void establishLoginSession(
+            User user,
+            HttpServletRequest request,
+            HttpSession session,
+            HttpServletResponse response) {
+        // セッション固定化攻撃（Session Fixation）対策：ログイン時にセッション ID と CSRF トークンを再生成する
+        if (request != null && request.getSession(false) != null) {
+            request.changeSessionId();
+        }
         session.setAttribute(SESSION_USER_ID, user.getUserId());
         session.setAttribute(SESSION_USER_EMAIL, user.getEmail());
+        session.setAttribute(SecurityFilter.SESSION_CSRF_TOKEN, SecurityUtils.generateSecureToken());
 
-        Cookie cookie = new Cookie(COOKIE_USER_ID, user.getUserId());
-        cookie.setPath("/");
-        cookie.setHttpOnly(true);
-        cookie.setMaxAge(7 * 24 * 60 * 60);
-        response.addCookie(cookie);
+        // 署名なし user_id Cookie による偽装認証を防ぐため、旧 Cookie が残っていれば破棄し、
+        // 認証状態はサーバ側 HttpSession（暗号論的ランダムな HttpOnly + SameSite=Lax の JSESSIONID）のみで管理する
+        clearUserCookie(response);
     }
 
     private void clearUserCookie(HttpServletResponse response) {
@@ -838,15 +903,12 @@ public class AuthController {
         response.addCookie(cookie);
     }
 
-    private String resolveAuthenticatedUserId(HttpSession session, String cookieUserId) {
+    private String resolveAuthenticatedUserId(HttpSession session) {
         if (session != null) {
             Object sessionAttr = session.getAttribute(SESSION_USER_ID);
             if (sessionAttr != null && !String.valueOf(sessionAttr).isBlank()) {
                 return String.valueOf(sessionAttr);
             }
-        }
-        if (cookieUserId != null && !cookieUserId.isBlank()) {
-            return cookieUserId;
         }
         return null;
     }

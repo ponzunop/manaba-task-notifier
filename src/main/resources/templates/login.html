@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" th:content="${csrfToken}">
     <title>ログイン・Gmail連携 | manaba 課題通知システム</title>
     <link rel="stylesheet" th:href="@{/css/style.css}">
 </head>
@@ -140,6 +141,7 @@ function exportManabaJson() {
                 </div>
 
                 <form th:action="@{/auth/gas-browser-start}" method="post">
+                    <input type="hidden" name="_csrf" th:value="${csrfToken}">
                     <div class="form-group">
                         <label for="gasUrl" class="form-label">GAS ウェブアプリ URL（自分のみ公開でOK） <span style="color: var(--danger);">*</span></label>
                         <input type="url" id="gasUrl" name="gasUrl" class="form-control"
@@ -196,6 +198,7 @@ function exportManabaJson() {
                                         onclick="copyElementText('redirect-uri-code', this)">コピー</button>
                             </div>
                             <form th:action="@{/auth/oauth-config}" method="post" autocomplete="off">
+                                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                                 <div class="form-group">
                                     <label for="clientId" class="form-label">クライアント ID</label>
                                     <input type="text" id="clientId" name="clientId" class="form-control"
@@ -213,6 +216,7 @@ function exportManabaJson() {
 
                         <form th:action="@{/auth/oauth-token}" method="post" autocomplete="off"
                               style="padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
+                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
                             <div style="font-weight: 700; font-size: 0.85rem; margin-bottom: 0.5rem;">
                                 OAuth 2.0 Playground アクセストークンで試す
                             </div>
@@ -244,6 +248,7 @@ function exportManabaJson() {
 
                     <div style="margin-top: 0.85rem;">
                         <form th:action="@{/auth/gas-json-login}" method="post" style="margin-bottom: 1rem;">
+                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
                             <div class="form-group">
                                 <label for="jsonPayload" class="form-label">GAS 出力 JSON（<code>exportManabaJson()</code> または画面の「JSONをコピー」結果）</label>
                                 <textarea id="jsonPayload" name="jsonPayload" class="form-control" rows="4"
@@ -262,6 +267,7 @@ function exportManabaJson() {
                         <div class="divider"><span>または メール連携をスキップしてログイン</span></div>
 
                         <form th:action="@{/auth/login}" method="post">
+                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
                             <div class="grid-2">
                                 <div class="form-group">
                                     <label for="manual-email" class="form-label">メールアドレス <span style="color: var(--danger);">*</span></label>

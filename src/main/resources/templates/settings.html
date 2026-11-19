@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" th:content="${csrfToken}">
     <title>通知設定 | manaba 課題通知システム</title>
     <link rel="stylesheet" th:href="@{/css/style.css}">
     <style>
@@ -540,10 +541,14 @@
     </div>
     <div class="navbar-actions">
         <form th:action="@{/auth/fetch-tasks}" method="post" style="margin:0;">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
             <button type="submit" class="nav-btn">&#8635; Gmail同期</button>
         </form>
         <button type="button" class="nav-btn" onclick="requestPushPermission()">&#128276; 通知許可</button>
-        <a class="nav-btn" th:href="@{/auth/logout}">ログアウト</a>
+        <form th:action="@{/auth/logout}" method="post" style="margin:0;">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
+            <button type="submit" class="nav-btn">ログアウト</button>
+        </form>
     </div>
 </nav>
 
@@ -595,6 +600,7 @@
 
     <!-- メイン設定フォーム（POST /settings） -->
     <form th:action="@{/settings}" method="post">
+        <input type="hidden" name="_csrf" th:value="${csrfToken}">
         <section class="card">
             <div class="card-header">
                 <h2 class="card-title">1. 通知タイミング（複数選択可）</h2>
@@ -695,7 +701,9 @@
         <form th:id="'delete-course-' + ${setting.settingId}"
               th:action="@{/settings/courses/{id}/delete(id=${setting.settingId})}"
               method="post"
-              style="display:none;"></form>
+              style="display:none;">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
+        </form>
     </th:block>
 
     <!-- 新しい科目の手動追加フォーム（POST /settings/courses） -->
@@ -707,6 +715,7 @@
             まだ課題メールが届いていない科目でも、事前に通知対象として追加できます。
         </p>
         <form th:action="@{/settings/courses}" method="post" class="inline-form">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
             <input type="text"
                    name="courseName"
                    class="input-control"

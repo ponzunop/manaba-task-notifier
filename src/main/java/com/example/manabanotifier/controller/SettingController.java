@@ -9,7 +9,6 @@ import com.example.manabanotifier.repository.UserRepository;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -79,9 +78,8 @@ public class SettingController {
     @GetMapping
     public String showSettings(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             Model model) {
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -101,14 +99,13 @@ public class SettingController {
     @PostMapping
     public String saveSettings(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             @RequestParam(value = "timings", required = false) List<String> timings,
             @RequestParam(value = "customTiming", required = false) String customTiming,
             @RequestParam(value = "enabledSettingIds", required = false) List<Long> enabledSettingIds,
             @RequestParam(value = "enabledCourses", required = false) List<String> enabledCourses,
             RedirectAttributes redirectAttributes,
             Model model) {
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -171,10 +168,9 @@ public class SettingController {
     @PostMapping("/courses")
     public String addCourseSetting(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             @RequestParam("courseName") String courseName,
             RedirectAttributes redirectAttributes) {
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -212,10 +208,9 @@ public class SettingController {
     @PostMapping("/courses/{settingId}/delete")
     public String deleteCourseSetting(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             @PathVariable("settingId") Long settingId,
             RedirectAttributes redirectAttributes) {
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -232,16 +227,15 @@ public class SettingController {
     }
 
     /**
-     * セッションまたはCookieからログイン中の user_id を解決する。
+     * サーバ側セッションからログイン中の user_id を解決する（署名なし Cookie による認証偽装を防止）。
      */
-    private String resolveUserId(HttpSession session, String cookieUserId) {
+    private String resolveUserId(HttpSession session) {
+        if (session == null) {
+            return null;
+        }
         Object sessionUserId = session.getAttribute("user_id");
         if (sessionUserId instanceof String s && !s.isBlank()) {
             return s;
-        }
-        if (cookieUserId != null && !cookieUserId.isBlank()) {
-            session.setAttribute("user_id", cookieUserId);
-            return cookieUserId;
         }
         return null;
     }

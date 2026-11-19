@@ -38,7 +38,10 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
     event.notification.close();
-    const targetUrl = (event.notification.data && event.notification.data.url) || "/tasks";
+    const rawUrl = (event.notification.data && event.notification.data.url) || "/tasks";
+    const targetUrl = (typeof rawUrl === "string" && rawUrl.startsWith("/") && !rawUrl.startsWith("//"))
+        ? rawUrl
+        : "/tasks";
 
     event.waitUntil(
         self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {

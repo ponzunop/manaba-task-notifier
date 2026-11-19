@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" th:content="${csrfToken}">
     <title>通知履歴・再試行 | manaba 課題通知システム</title>
     <link rel="stylesheet" th:href="@{/css/style.css}">
     <style>
@@ -509,7 +510,10 @@
             <span th:if="${currentUser != null}"
                   th:text="${currentUser.displayName != null && !currentUser.displayName.isBlank() ? currentUser.displayName : currentUser.email}">ユーザー</span>
             <span th:if="${currentUser == null}" th:text="${userId}">ユーザー</span>
-            <a th:href="@{/auth/logout}" class="btn-logout">ログアウト</a>
+            <form th:action="@{/auth/logout}" method="post" style="margin:0; display:inline;">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                <button type="submit" class="btn-logout" style="cursor:pointer;">ログアウト</button>
+            </form>
         </div>
     </div>
 </nav>
@@ -525,11 +529,13 @@
 
         <div class="action-bar">
             <form th:action="@{/history/trigger-check}" method="post" style="margin:0;">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                 <button type="submit" class="btn btn-primary">
                     ⚡ 今すぐ通知チェック実行
                 </button>
             </form>
             <form th:action="@{/history/simulate-fail}" method="post" style="margin:0;">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                 <button type="submit" class="btn btn-warning-outline">
                     🧪 失敗ケースをシミュレート
                 </button>
@@ -630,6 +636,7 @@
                               th:action="@{/history/{id}/retry(id=${item.logId()})}"
                               method="post"
                               style="margin:0;">
+                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
                             <button type="submit" class="btn btn-retry">🔄 再試行</button>
                         </form>
                         <span th:if="${item.status() == 'SUCCESS'}" class="subtext" style="margin:0;">完了</span>
@@ -706,9 +713,15 @@
                 const result = await Notification.requestPermission();
                 updatePermissionUI();
                 if (result === 'granted') {
+                    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                    const headers = {'Content-Type': 'application/json'};
+                    if (csrfMeta && csrfMeta.content) {
+                        headers['X-CSRF-TOKEN'] = csrfMeta.content;
+                    }
                     await fetch('/auth/push-subscribe', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
+                        headers: headers,
+                        credentials: 'same-origin',
                         body: JSON.stringify({
                             endpoint: 'browser-notification://' + navigator.userAgent.slice(0, 40),
                             keys: JSON.stringify({permission: 'granted'})
@@ -724,16 +737,38 @@
             }
         };
 
+        function sanitizeInternalUrl(url) {
+            if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
+                return url;
+            }
+            return '/tasks';
+        }
+
         function showLiveToast(item) {
             const container = document.getElementById('live-toast-container');
             if (!container) return;
 
+            const safeUrl = sanitizeInternalUrl(item.url);
             const toast = document.createElement('div');
             toast.className = 'live-toast';
-            toast.innerHTML =
-                '<div class="live-toast-title">🔔 課題締切通知：' + escapeHtml(item.courseName || '授業') + '</div>' +
-                '<div>' + escapeHtml(item.message || item.title) + '</div>' +
-                '<div style="margin-top:0.35rem;"><a href="' + escapeHtml(item.url || '/tasks') + '">課題一覧を開く →</a></div>';
+
+            const titleEl = document.createElement('div');
+            titleEl.className = 'live-toast-title';
+            titleEl.textContent = '🔔 課題締切通知：' + (item.courseName || '授業');
+
+            const bodyEl = document.createElement('div');
+            bodyEl.textContent = item.message || item.title || '';
+
+            const linkWrap = document.createElement('div');
+            linkWrap.style.marginTop = '0.35rem';
+            const linkEl = document.createElement('a');
+            linkEl.href = safeUrl;
+            linkEl.textContent = '課題一覧を開く →';
+            linkWrap.appendChild(linkEl);
+
+            toast.appendChild(titleEl);
+            toast.appendChild(bodyEl);
+            toast.appendChild(linkWrap);
             container.appendChild(toast);
 
             setTimeout(() => {
@@ -744,13 +779,14 @@
         function triggerBrowserPopup(item) {
             showLiveToast(item);
             if ('Notification' in window && Notification.permission === 'granted') {
+                const safeUrl = sanitizeInternalUrl(item.url);
                 const n = new Notification('【manaba課題通知】' + (item.courseName || ''), {
                     body: (item.title || '') + '\n締切: ' + (item.deadline || '') + '\n' + (item.message || ''),
                     tag: 'manaba-log-' + item.logId
                 });
                 n.onclick = function () {
                     window.focus();
-                    window.location.href = item.url || '/tasks';
+                    window.location.href = safeUrl;
                 };
             }
         }

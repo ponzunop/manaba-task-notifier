@@ -146,7 +146,9 @@ public class NotificationScheduler {
 
         User user = userRepository.findById(userId).orElse(null);
         Task task = targetLog.getTaskId() != null
-                ? taskRepository.findById(targetLog.getTaskId()).orElse(null)
+                ? taskRepository.findById(targetLog.getTaskId())
+                        .filter(t -> userId.equals(t.getUserId()))
+                        .orElse(null)
                 : null;
 
         try {
@@ -389,12 +391,9 @@ public class NotificationScheduler {
         // 実稼働時は user.getPushEndpoint() / user.getPushKeys() を用いて Web Push (VAPID) 送信を行う。
         // 本アプリではブラウザ側 /api/notifications/recent ポーリングとも連携し、
         // スマートフォン / PC ブラウザの Notification API で即座にプッシュ通知を表示する。
-        String endpointInfo = (user != null && user.getPushEndpoint() != null && !user.getPushEndpoint().isBlank())
-                ? user.getPushEndpoint()
-                : "browser-polling-channel";
-        String taskInfo = task != null ? task.getTitle() : "通知再試行";
-        log.info("Web Push 通知配信実行: endpoint={}, task={}, payload={}",
-                endpointInfo, taskInfo, payloadMessage);
+        boolean hasEndpoint = user != null && user.getPushEndpoint() != null && !user.getPushEndpoint().isBlank();
+        Long taskId = task != null ? task.getTaskId() : null;
+        log.info("Web Push 通知配信実行: hasEndpoint={}, taskId={}", hasEndpoint, taskId);
     }
 
     private String buildNotificationMessage(Task task, String timingTag) {

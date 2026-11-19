@@ -70,11 +70,28 @@
         }
     }
 
+    function getCsrfToken() {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute("content") : "";
+    }
+
+    function sanitizeInternalUrl(url) {
+        if (typeof url === "string" && url.startsWith("/") && !url.startsWith("//")) {
+            return url;
+        }
+        return "/tasks";
+    }
+
     async function sendSubscriptionToServer(subscriptionPayload) {
         try {
+            const headers = { "Content-Type": "application/json" };
+            const csrfToken = getCsrfToken();
+            if (csrfToken) {
+                headers["X-CSRF-TOKEN"] = csrfToken;
+            }
             const res = await fetch("/auth/push-subscribe", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: headers,
                 credentials: "same-origin",
                 body: JSON.stringify(subscriptionPayload)
             });
@@ -92,7 +109,7 @@
         if (!getNotificationSupport() || Notification.permission !== "granted") {
             return false;
         }
-        const targetUrl = url || "/tasks";
+        const targetUrl = sanitizeInternalUrl(url);
         try {
             if (swRegistration && swRegistration.showNotification) {
                 await swRegistration.showNotification(title, {

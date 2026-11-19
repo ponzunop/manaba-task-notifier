@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" th:content="${csrfToken}">
     <title>小テスト・課題一覧 | manaba 課題通知システム</title>
     <link rel="stylesheet" th:href="@{/css/style.css}">
     <style>
@@ -879,13 +880,17 @@
         </div>
         <div class="nav-actions">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                 <button type="submit"
                         class="btn-nav btn-nav-sync"
                         title="GAS（自分のみ）連携またはOAuth 2.0連携でGmailからワンクリック再同期">Gmailから再同期</button>
             </form>
             <button type="button" id="push-permission-btn" class="btn-nav btn-nav-push">通知許可を確認中</button>
             <span class="user-chip" th:text="${userDisplayName}">user</span>
-            <a th:href="@{/auth/logout}" class="btn-nav">ログアウト</a>
+            <form th:action="@{/auth/logout}" method="post" class="inline-form">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                <button type="submit" class="btn-nav">ログアウト</button>
+            </form>
         </div>
     </div>
 </header>
@@ -904,6 +909,7 @@
     <section class="quick-actions-bar" aria-label="小テスト情報の取得と追加">
         <div class="quick-actions-left">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
+                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                 <button type="submit"
                         class="btn-accent"
                         title="GAS（自分のみ）ブラウザ連携またはGoogle OAuth 2.0連携によりワンクリックで最新メールから取得">Gmailから最新の小テストを取得</button>
@@ -1079,6 +1085,7 @@
                                   th:action="@{/tasks/{id}/submit(id=${task.taskId})}"
                                   method="post"
                                   class="inline-form">
+                                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                                 <input type="hidden" name="filter" th:value="${currentFilter}">
                                 <button type="submit"
                                         class="btn-submit-done"
@@ -1088,6 +1095,7 @@
                                   th:action="@{/tasks/{id}/unsubmit(id=${task.taskId})}"
                                   method="post"
                                   class="inline-form">
+                                <input type="hidden" name="_csrf" th:value="${csrfToken}">
                                 <input type="hidden" name="filter" th:value="${currentFilter}">
                                 <button type="submit"
                                         class="btn-unsubmit"
@@ -1113,6 +1121,7 @@
             <strong>manaba 通知メール本文</strong>のそのままの貼り付け、または <strong>Google Apps Script (GAS) の <code>exportManabaJson()</code> 出力 JSON</strong> の貼り付けの両方に対応しています。科目名・小テスト名・公開時間（受付開始日時）・締切時間（受付終了日時）・URLを自動解析して一括登録します。
         </p>
         <form th:action="@{/auth/import-email}" method="post">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
             <div class="form-group">
                 <label for="import-raw-text">メール本文 または GAS 出力 JSON（複数件まとめても可）</label>
                 <textarea id="import-raw-text"
@@ -1136,6 +1145,7 @@
             <button type="button" id="close-create-modal-btn" class="modal-close" aria-label="閉じる">&times;</button>
         </div>
         <form th:action="@{/tasks/create}" method="post">
+            <input type="hidden" name="_csrf" th:value="${csrfToken}">
             <div class="form-group">
                 <label for="create-task-type">種別</label>
                 <select id="create-task-type" name="taskType">
@@ -1265,9 +1275,15 @@
 
         async function registerPushSubscription() {
             try {
+                const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                const headers = { "Content-Type": "application/json" };
+                if (csrfMeta && csrfMeta.content) {
+                    headers["X-CSRF-TOKEN"] = csrfMeta.content;
+                }
                 await fetch("/auth/push-subscribe", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: headers,
+                    credentials: "same-origin",
                     body: JSON.stringify({
                         endpoint: "browser-notification://" + window.location.host + "/" + Date.now(),
                         keys: JSON.stringify({ browser: navigator.userAgent, permission: Notification.permission })

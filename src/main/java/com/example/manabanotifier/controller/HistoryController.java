@@ -12,7 +12,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -97,10 +96,9 @@ public class HistoryController {
     @GetMapping("/history")
     public String showHistory(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             Model model) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -161,10 +159,9 @@ public class HistoryController {
             @PathVariable("logId") Long logId,
             @RequestParam(value = "simulateError", defaultValue = "false") boolean simulateError,
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -187,10 +184,9 @@ public class HistoryController {
     @PostMapping("/history/trigger-check")
     public String triggerCheck(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -220,10 +216,9 @@ public class HistoryController {
     @PostMapping("/history/simulate-fail")
     public String simulateFail(
             HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId,
             RedirectAttributes redirectAttributes) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return "redirect:/login";
         }
@@ -243,10 +238,9 @@ public class HistoryController {
     @GetMapping("/api/notifications/recent")
     @ResponseBody
     public ResponseEntity<List<RecentNotificationDto>> getRecentNotifications(
-            HttpSession session,
-            @CookieValue(value = "user_id", required = false) String cookieUserId) {
+            HttpSession session) {
 
-        String userId = resolveUserId(session, cookieUserId);
+        String userId = resolveUserId(session);
         if (userId == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(List.of());
         }
@@ -285,14 +279,13 @@ public class HistoryController {
         return ResponseEntity.ok(result);
     }
 
-    private String resolveUserId(HttpSession session, String cookieUserId) {
+    private String resolveUserId(HttpSession session) {
+        if (session == null) {
+            return null;
+        }
         Object sessionUserId = session.getAttribute("user_id");
         if (sessionUserId != null && !sessionUserId.toString().isBlank()) {
             return sessionUserId.toString();
-        }
-        if (cookieUserId != null && !cookieUserId.isBlank()) {
-            session.setAttribute("user_id", cookieUserId);
-            return cookieUserId;
         }
         return null;
     }
@@ -314,11 +307,8 @@ public class HistoryController {
         if (taskId == null) {
             return null;
         }
-        Task task = taskMap.get(taskId);
-        if (task != null) {
-            return task;
-        }
-        return taskRepository.findById(taskId).orElse(null);
+        // IDOR 防止：必ずログイン中ユーザー所有の taskMap からのみ参照し、他ユーザーの Task を引かない
+        return taskMap.get(taskId);
     }
 
     private String extractTimingLabel(String message) {
