@@ -34,6 +34,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
@@ -41,8 +42,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Google OAuth 2.0 (Gmail REST API) および Google Apps Script (GAS) ウェブアプリ連携、
- * manaba 通知メール本文・JSON 取り込みを行うサービス（担当：大友）。
+ * ブラウザ経由 GAS 連携・Google OAuth 2.0 (Gmail REST API)・manaba 小テスト通知メール解析サービス（担当：大友）。
  */
 @Service
 public class TaskFetchService {
@@ -50,29 +50,30 @@ public class TaskFetchService {
     private static final Logger log = LoggerFactory.getLogger(TaskFetchService.class);
 
     private static final String DEFAULT_NOTIFY_TIMINGS = "24,5,1";
+    private static final int MAX_SKIPPED_SAMPLES = 5;
     private static final Path OAUTH_CONFIG_PATH = Paths.get("config", "google-oauth.properties");
     private static final String GMAIL_SEARCH_QUERY =
             "from:do-not-reply@manaba.jp OR manaba OR (小テスト (受付終了 OR 締切 OR コース))";
 
-    // コース名・科目名パターン（[コース名] : ..., ■コース名：..., コース名: ... 等に対応）
+    // コース名・科目名パターン（[コース名] : ..., ■コース名：..., コース：..., 科目名：... 等に対応）
     private static final Pattern COURSE_LINE_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:\\[\\s*(?:コース名|科目名|コース|講義名)\\s*\\]|[■◆▼●・]?\\s*(?:コース名|科目名|コース|講義名))\\s*[:：]\\s*(.+?)\\s*$");
+            "(?m)^\\s*(?:\\[\\s*(?:コース名|科目名|コース|講義名|授業名)\\s*\\]|[■◆▼●・]?\\s*(?:コース名|科目名|コース|講義名|授業名))\\s*[:：]\\s*(.+?)\\s*$");
 
     // 小テスト名・課題名パターン
     private static final Pattern TITLE_LINE_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:\\[\\s*(?:小テスト名|課題名|アンケート名|テスト名|レポート名|タイトル)\\s*\\]|[■◆▼●・]?\\s*(?:小テスト名|課題名|アンケート名|テスト名|レポート名|タイトル))\\s*[:：]\\s*(.+?)\\s*$");
+            "(?m)^\\s*(?:\\[\\s*(?:小テスト名|小テスト|課題名|課題|アンケート名|テスト名|レポート名|タイトル)\\s*\\]|[■◆▼●・]?\\s*(?:小テスト名|小テスト|課題名|課題|アンケート名|テスト名|レポート名|タイトル))\\s*[:：]\\s*(.+?)\\s*$");
 
-    // 公開時間（受付開始日時）パターン
+    // 公開時間（受付開始日時・公開日時・公開開始）パターン
     private static final Pattern OPEN_TIME_LINE_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:\\[\\s*(?:受付開始日時|受付開始|公開日時|公開時間|開始日時)\\s*\\]|[■◆▼●・]?\\s*(?:受付開始日時|受付開始|公開日時|公開時間|開始日時))\\s*[:：]\\s*(.+?)\\s*$");
+            "(?m)^\\s*(?:\\[\\s*(?:受付開始日時|受付開始|公開開始日時|公開開始|公開日時|公開時間|開始日時)\\s*\\]|[■◆▼●・]?\\s*(?:受付開始日時|受付開始|公開開始日時|公開開始|公開日時|公開時間|開始日時))\\s*[:：]\\s*(.+?)\\s*$");
 
-    // 締切時間（受付終了日時）パターン
+    // 締切時間（受付終了日時・公開終了・締切・期限）パターン
     private static final Pattern DEADLINE_LINE_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:\\[\\s*(?:受付終了日時|受付終了|締切日時|締め切り日時|提出期限|締切)\\s*\\]|[■◆▼●・]?\\s*(?:受付終了日時|受付終了|締切日時|締め切り日時|提出期限|締切))\\s*[:：]\\s*(.+?)\\s*$");
+            "(?m)^\\s*(?:\\[\\s*(?:受付終了日時|受付終了|公開終了日時|公開終了|締切日時|締め切り日時|提出期限|締切|期限|終了日時)\\s*\\]|[■◆▼●・]?\\s*(?:受付終了日時|受付終了|公開終了日時|公開終了|締切日時|締め切り日時|提出期限|締切|期限|終了日時))\\s*[:：]\\s*(.+?)\\s*$");
 
-    // 受付期間（開始 ～ 終了）パターン
+    // 受付期間・公開期間（開始 ～ 終了 / から ～ まで）パターン
     private static final Pattern PERIOD_LINE_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:\\[\\s*(?:受付期間|公開期間|実施期間)\\s*\\]|[■◆▼●・]?\\s*(?:受付期間|公開期間|実施期間))\\s*[:：]\\s*(.+?)\\s*[～〜~－\\-]\\s*(.+?)\\s*$");
+            "(?m)^\\s*(?:\\[\\s*(?:受付期間|公開期間|実施期間|提出期間)\\s*\\]|[■◆▼●・]?\\s*(?:受付期間|公開期間|実施期間|提出期間))\\s*[:：]\\s*(.+?)\\s*(?:[～〜~－\\-]|から)\\s*(.+?)(?:まで)?\\s*$");
 
     // 日時文字列抽出パターン（曜日カッコ付き・年月日・時分対応）
     private static final Pattern DATETIME_EXTRACT_PATTERN = Pattern.compile(
@@ -216,7 +217,51 @@ public class TaskFetchService {
     }
 
     /**
-     * GAS ウェブアプリからの取得結果 DTO。
+     * GAS ペイロード取り込み結果 DTO（スキャン件数・登録件数・解析できなかったサンプルを含む）。
+     */
+    public static class ImportResult {
+        private final String detectedEmail;
+        private final String detectedGasUrl;
+        private final int scannedEmailCount;
+        private final int syncedCount;
+        private final List<String> skippedSamples;
+
+        public ImportResult(
+                String detectedEmail,
+                String detectedGasUrl,
+                int scannedEmailCount,
+                int syncedCount,
+                List<String> skippedSamples) {
+            this.detectedEmail = detectedEmail;
+            this.detectedGasUrl = detectedGasUrl;
+            this.scannedEmailCount = scannedEmailCount;
+            this.syncedCount = syncedCount;
+            this.skippedSamples = skippedSamples != null ? skippedSamples : List.of();
+        }
+
+        public String getDetectedEmail() {
+            return detectedEmail;
+        }
+
+        public String getDetectedGasUrl() {
+            return detectedGasUrl;
+        }
+
+        public int getScannedEmailCount() {
+            return scannedEmailCount;
+        }
+
+        public int getSyncedCount() {
+            return syncedCount;
+        }
+
+        public List<String> getSkippedSamples() {
+            return skippedSamples;
+        }
+    }
+
+    /**
+     * GAS ウェブアプリからの取得結果 DTO（互換性維持）。
      */
     public static class GasFetchResult {
         private final String userId;
@@ -301,13 +346,15 @@ public class TaskFetchService {
 
     /**
      * manaba 課題・小テスト通知メールの件名・本文から科目名・名称・公開時間・締切時間・種別・URL を抽出する。
+     * 千葉工業大学を含む多様な manaba 通知メール形式に対応し、ラベル欠落時も日時ペアと件名からフォールバック抽出する。
      */
     public Optional<ParsedTask> parseManabaEmail(String subject, String body) {
-        if (body == null || body.isBlank()) {
+        if ((body == null || body.isBlank()) && (subject == null || subject.isBlank())) {
             return Optional.empty();
         }
 
-        String normalizedBody = body.replace("\r\n", "\n").replace("\r", "\n");
+        String normalizedBody = (body != null ? body : "").replace("\r\n", "\n").replace("\r", "\n");
+        String cleanedSubject = subject != null ? subject.trim() : "";
 
         String courseName = extractFirstGroup(COURSE_LINE_PATTERN, normalizedBody);
         String title = extractFirstGroup(TITLE_LINE_PATTERN, normalizedBody);
@@ -335,12 +382,62 @@ public class TaskFetchService {
             }
         }
 
-        if (subject != null && !subject.isBlank()) {
+        // 1行にラベル・次行に値の形式へのフォールバック（例: "[コース名]\nソフトウェア工学"）
+        if (courseName == null) {
+            courseName = extractNextLineAfterLabel(normalizedBody, "コース名", "科目名", "コース");
+        }
+        if (title == null) {
+            title = extractNextLineAfterLabel(normalizedBody, "小テスト名", "課題名", "アンケート名", "タイトル");
+        }
+
+        // 本文から日時ラベルが見つからない場合：本文中の日時出現順からフォールバック抽出
+        boolean manabaHint = containsIgnoreCase(cleanedSubject, "manaba")
+                || cleanedSubject.contains("小テスト")
+                || containsIgnoreCase(normalizedBody, "manaba")
+                || normalizedBody.contains("小テスト")
+                || normalizedBody.contains("受付");
+
+        if (openTime == null && deadline == null && manabaHint) {
+            List<LocalDateTime> foundDates = extractAllDateTimes(normalizedBody);
+            if (foundDates.size() >= 2) {
+                openTime = foundDates.get(0);
+                deadline = foundDates.get(1);
+            } else if (foundDates.size() == 1) {
+                deadline = foundDates.get(0);
+            }
+        } else if (deadline == null && openTime != null) {
+            List<LocalDateTime> foundDates = extractAllDateTimes(normalizedBody);
+            for (LocalDateTime candidate : foundDates) {
+                if (!candidate.equals(openTime)) {
+                    deadline = candidate;
+                    break;
+                }
+            }
+        }
+
+        // 件名・本文先頭行からのコース名・タイトル補完
+        if (!cleanedSubject.isBlank()) {
             if (courseName == null) {
-                courseName = extractCourseFromSubject(subject);
+                courseName = extractCourseFromSubject(cleanedSubject);
             }
             if (title == null) {
-                title = extractTitleFromSubject(subject);
+                title = extractTitleFromSubject(cleanedSubject);
+            }
+        }
+
+        if (manabaHint && (deadline != null || openTime != null)) {
+            if (courseName == null && title != null) {
+                String fallbackCourse = stripManabaTag(cleanedSubject);
+                courseName = !fallbackCourse.isBlank() ? fallbackCourse : "manaba科目";
+            } else if (title == null && courseName != null) {
+                String fallbackTitle = stripManabaTag(cleanedSubject);
+                title = !fallbackTitle.isBlank() ? fallbackTitle : detectTaskType(cleanedSubject, normalizedBody);
+            } else if (courseName == null && title == null) {
+                String cleaned = stripManabaTag(cleanedSubject);
+                if (!cleaned.isBlank()) {
+                    courseName = extractFirstMeaningfulLine(normalizedBody, "manaba科目");
+                    title = cleaned;
+                }
             }
         }
 
@@ -355,7 +452,7 @@ public class TaskFetchService {
             deadline = openTime;
         }
 
-        String taskType = detectTaskType(subject, normalizedBody);
+        String taskType = detectTaskType(cleanedSubject, normalizedBody);
         String taskUrl = extractTaskUrl(normalizedBody);
 
         return Optional.of(new ParsedTask(
@@ -366,6 +463,87 @@ public class TaskFetchService {
                 taskType,
                 taskUrl
         ));
+    }
+
+    /**
+     * ブラウザ経由 GAS（または貼り付け JSON）から送信された JSON ペイロードを解析し、DB に登録する。
+     */
+    @Transactional
+    public ImportResult importFromGasPayload(String userId, String jsonPayload) {
+        if (jsonPayload == null || jsonPayload.isBlank()) {
+            return new ImportResult(null, null, 0, 0, List.of());
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(jsonPayload.trim());
+            String detectedEmail = root.isObject() ? blankToNull(root.path("email").asText(null)) : null;
+            String detectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+
+            if (root.isObject() && root.has("subject") && root.has("body") && !root.has("emails")) {
+                String subject = root.path("subject").asText("");
+                String from = root.path("from").asText("");
+                String body = root.path("body").asText("");
+                List<String> skipped = new ArrayList<>();
+                Optional<ParsedTask> parsed = parseManabaEmail(subject, body);
+                int synced = 0;
+                if (parsed.isPresent()) {
+                    if (userId != null && !userId.isBlank()) {
+                        upsertParsedTask(userId, parsed.get());
+                    }
+                    synced = 1;
+                } else if (isManabaRelated(subject, from, body)) {
+                    skipped.add(formatSkippedSample(subject, from, body));
+                }
+                return new ImportResult(detectedEmail, detectedGasUrl, 1, synced, skipped);
+            }
+
+            JsonNode emailsNode = extractEmailsArrayNode(root);
+            if (emailsNode == null || !emailsNode.isArray()) {
+                return new ImportResult(detectedEmail, detectedGasUrl, 0, 0, List.of());
+            }
+
+            int scanned = emailsNode.size();
+            int synced = 0;
+            List<String> skippedSamples = new ArrayList<>();
+
+            for (JsonNode item : emailsNode) {
+                String subject = item.path("subject").asText("");
+                String from = item.path("from").asText("");
+                String body = item.path("body").asText("");
+
+                Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, body);
+                if (parsedOpt.isPresent()) {
+                    if (userId != null && !userId.isBlank()) {
+                        upsertParsedTask(userId, parsedOpt.get());
+                    }
+                    synced++;
+                } else if (skippedSamples.size() < MAX_SKIPPED_SAMPLES && isManabaRelated(subject, from, body)) {
+                    skippedSamples.add(formatSkippedSample(subject, from, body));
+                }
+            }
+
+            return new ImportResult(detectedEmail, detectedGasUrl, scanned, synced, skippedSamples);
+        } catch (IOException ex) {
+            log.warn("GAS JSON ペイロードの解析に失敗しました: {}", ex.getMessage());
+            throw new GmailFetchException("GAS から受信した JSON の形式が正しくありません: " + ex.getMessage(), false, ex);
+        }
+    }
+
+    /**
+     * JSON ペイロードから email / gasUrl メタデータのみを安全に抽出する（ログインユーザー特定用）。
+     */
+    public ImportResult peekGasPayloadMetadata(String jsonPayload) {
+        if (jsonPayload == null || jsonPayload.isBlank()) {
+            return new ImportResult(null, null, 0, 0, List.of());
+        }
+        try {
+            JsonNode root = objectMapper.readTree(jsonPayload.trim());
+            String detectedEmail = root.isObject() ? blankToNull(root.path("email").asText(null)) : null;
+            String detectedGasUrl = root.isObject() ? blankToNull(root.path("gasUrl").asText(null)) : null;
+            return new ImportResult(detectedEmail, detectedGasUrl, 0, 0, List.of());
+        } catch (IOException ex) {
+            return new ImportResult(null, null, 0, 0, List.of());
+        }
     }
 
     /**
@@ -381,6 +559,7 @@ public class TaskFetchService {
                 .orElseThrow(() -> new GmailFetchException("ユーザー情報が見つかりません。", true));
 
         if ("GAS".equalsIgnoreCase(user.getAuthType())
+                || ("GAS_BROWSER".equalsIgnoreCase(user.getAuthType()) && user.getGasUrl() != null && !user.getGasUrl().isBlank())
                 || (user.getGasUrl() != null && !user.getGasUrl().isBlank())) {
             GasFetchResult result = fetchTasksFromGas(userId, user.getGasUrl(), user.getGasToken());
             return result.getSyncedCount();
@@ -537,16 +716,13 @@ public class TaskFetchService {
     }
 
     /**
-     * 既知の userId 向けに Google Apps Script (GAS) ウェブアプリから manaba メール JSON を取得・保存する。
+     * サーバ直接呼び出しによる GAS ウェブアプリ取得（互換性維持）。
      */
     @Transactional
     public GasFetchResult fetchTasksFromGas(String userId, String gasUrl, String gasToken) {
         return executeGasFetch(userId, null, gasUrl, gasToken);
     }
 
-    /**
-     * 初回 GAS ログイン時用（メールアドレス未入力時は GAS 応答内の email から userId を決定する）。
-     */
     @Transactional
     public GasFetchResult fetchTasksFromGasForLogin(String optionalEmail, String gasUrl, String gasToken) {
         return executeGasFetch(null, optionalEmail, gasUrl, gasToken);
@@ -585,10 +761,8 @@ public class TaskFetchService {
 
             if (isHtmlResponse(bodyText) || res.statusCode() == 401 || res.statusCode() == 403) {
                 throw new GmailFetchException(
-                        "GAS ウェブアプリの『アクセスできるユーザー』が『全員』になっていないか、"
-                                + "組織の制限により外部アクセスがブロックされています。"
-                                + "『全員』で再デプロイするか、GAS エディタで exportManabaJson を実行して出力 JSON を画面から貼り付けてください"
-                                + "（または Google OAuth 2.0 をご利用ください）。",
+                        "GAS ウェブアプリが「自分のみ」で公開されているためサーバ直接アクセスではログイン画面が返りました。"
+                                + "「GAS を開いて自分の Gmail から小テストを取得＆ログイン」（ブラウザ経由連携）をご利用ください。",
                         true);
             }
 
@@ -604,9 +778,7 @@ public class TaskFetchService {
 
             JsonNode root = objectMapper.readTree(bodyText);
             if (root.isObject() && root.has("error") && !root.path("error").asText("").isBlank()) {
-                throw new GmailFetchException(
-                        "GAS ウェブアプリエラー: " + root.path("error").asText(),
-                        true);
+                throw new GmailFetchException("GAS ウェブアプリエラー: " + root.path("error").asText(), true);
             }
 
             String gasEmail = root.isObject() ? root.path("email").asText("").trim().toLowerCase() : "";
@@ -618,11 +790,8 @@ public class TaskFetchService {
                     ? knownUserId
                     : generateUserId(resolvedEmail);
 
-            JsonNode emailsNode = extractEmailsArrayNode(root);
-            int totalMessages = emailsNode != null ? emailsNode.size() : 0;
-            int syncedCount = upsertFromJsonArray(targetUserId, emailsNode);
-
-            return new GasFetchResult(targetUserId, resolvedEmail, totalMessages, syncedCount);
+            ImportResult result = importFromGasPayload(targetUserId, bodyText);
+            return new GasFetchResult(targetUserId, resolvedEmail, result.getScannedEmailCount(), result.getSyncedCount());
         } catch (GmailFetchException ex) {
             throw ex;
         } catch (IllegalArgumentException ex) {
@@ -636,7 +805,7 @@ public class TaskFetchService {
     }
 
     /**
-     * 貼り付けられた manaba 通知メール本文（1通/複数通）または GAS の exportManabaJson() JSON を解析して登録する。
+     * 貼り付けられた manaba 通知メール本文（1通/複数通）または GAS JSON を解析して登録する。
      */
     @Transactional
     public int importFromRawEmailText(String userId, String rawText) {
@@ -647,21 +816,8 @@ public class TaskFetchService {
         String trimmed = rawText.trim();
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             try {
-                JsonNode root = objectMapper.readTree(trimmed);
-                if (root.isObject() && root.has("subject") && root.has("body")) {
-                    Optional<ParsedTask> single = parseManabaEmail(
-                            root.path("subject").asText(""),
-                            root.path("body").asText(""));
-                    if (single.isPresent()) {
-                        upsertParsedTask(userId, single.get());
-                        return 1;
-                    }
-                    return 0;
-                }
-                JsonNode emailsNode = extractEmailsArrayNode(root);
-                return upsertFromJsonArray(userId, emailsNode);
-            } catch (IOException ex) {
-                log.warn("JSON 形式でのメール取り込み解析に失敗しました: {}", ex.getMessage());
+                return importFromGasPayload(userId, trimmed).getSyncedCount();
+            } catch (GmailFetchException ex) {
                 return 0;
             }
         }
@@ -696,25 +852,29 @@ public class TaskFetchService {
         return null;
     }
 
-    private int upsertFromJsonArray(String userId, JsonNode emailsNode) {
-        if (emailsNode == null || !emailsNode.isArray()) {
-            return 0;
+    private boolean isManabaRelated(String subject, String from, String body) {
+        return containsIgnoreCase(subject, "manaba")
+                || containsIgnoreCase(from, "manaba")
+                || (subject != null && subject.contains("小テスト"))
+                || containsIgnoreCase(body, "manaba")
+                || (body != null && body.contains("小テスト"));
+    }
+
+    private String formatSkippedSample(String subject, String from, String body) {
+        String safeSubject = (subject != null && !subject.isBlank()) ? subject.trim() : "(件名なし)";
+        String cleanBody = (body != null ? body : "").replaceAll("\\s+", " ").trim();
+        String snippet = cleanBody.length() > 200 ? cleanBody.substring(0, 200) + "..." : cleanBody;
+        StringBuilder sb = new StringBuilder();
+        sb.append("件名: ").append(safeSubject);
+        if (from != null && !from.isBlank()) {
+            sb.append(" | 差出人: ").append(from.trim());
         }
-        int syncedCount = 0;
-        for (JsonNode item : emailsNode) {
-            String subject = item.path("subject").asText("");
-            String body = item.path("body").asText("");
-            Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, body);
-            if (parsedOpt.isPresent()) {
-                upsertParsedTask(userId, parsedOpt.get());
-                syncedCount++;
-            }
-        }
-        return syncedCount;
+        sb.append(" | 本文: ").append(snippet);
+        return sb.toString();
     }
 
     private boolean isHtmlResponse(String bodyText) {
-        String lower = bodyText.toLowerCase();
+        String lower = bodyText.toLowerCase(Locale.ROOT);
         return lower.startsWith("<!doctype")
                 || lower.startsWith("<html")
                 || lower.contains("<title>google")
@@ -891,6 +1051,36 @@ public class TaskFetchService {
                 .replace("&#39;", "'");
     }
 
+    private String extractNextLineAfterLabel(String body, String... labels) {
+        String[] lines = body.split("\n");
+        for (int i = 0; i < lines.length - 1; i++) {
+            String trimmed = lines[i].trim()
+                    .replaceAll("^[\\[■◆▼●・\\s]+", "")
+                    .replaceAll("[\\]\\s:：]+$", "");
+            for (String label : labels) {
+                if (trimmed.equals(label)) {
+                    String next = lines[i + 1].trim();
+                    if (!next.isBlank() && !next.startsWith("[") && !next.startsWith("■")) {
+                        return next;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private List<LocalDateTime> extractAllDateTimes(String text) {
+        List<LocalDateTime> list = new ArrayList<>();
+        Matcher m = DATETIME_EXTRACT_PATTERN.matcher(text);
+        while (m.find()) {
+            LocalDateTime dt = parseDateTime(m.group(1));
+            if (dt != null) {
+                list.add(dt);
+            }
+        }
+        return list;
+    }
+
     private String extractCourseFromSubject(String subject) {
         Matcher parenMatcher = SUBJECT_COURSE_PAREN_PATTERN.matcher(subject);
         if (parenMatcher.find()) {
@@ -902,23 +1092,55 @@ public class TaskFetchService {
         Matcher bracketMatcher = SUBJECT_COURSE_BRACKET_PATTERN.matcher(subject);
         while (bracketMatcher.find()) {
             String candidate = bracketMatcher.group(1).trim();
-            if (!candidate.equalsIgnoreCase("manaba") && !candidate.contains("リマインダ") && !candidate.contains("お知らせ")) {
+            if (!candidate.equalsIgnoreCase("manaba")
+                    && !candidate.contains("リマインダ")
+                    && !candidate.contains("お知らせ")) {
                 return candidate;
             }
+        }
+        String stripped = stripManabaTag(subject);
+        int slashIdx = stripped.indexOf('/');
+        if (slashIdx > 0) {
+            return stripped.substring(0, slashIdx).trim();
         }
         return null;
     }
 
     private String extractTitleFromSubject(String subject) {
-        int slashIdx = subject.indexOf('/');
-        if (slashIdx >= 0 && slashIdx + 1 < subject.length()) {
-            return subject.substring(slashIdx + 1).trim();
+        String stripped = stripManabaTag(subject);
+        int slashIdx = stripped.indexOf('/');
+        if (slashIdx >= 0 && slashIdx + 1 < stripped.length()) {
+            return stripped.substring(slashIdx + 1).trim();
         }
-        int colonIdx = Math.max(subject.indexOf(':'), subject.indexOf('：'));
-        if (colonIdx >= 0 && colonIdx + 1 < subject.length()) {
-            return subject.substring(colonIdx + 1).trim();
+        int colonIdx = Math.max(stripped.indexOf(':'), stripped.indexOf('：'));
+        if (colonIdx >= 0 && colonIdx + 1 < stripped.length()) {
+            return stripped.substring(colonIdx + 1).trim();
         }
         return null;
+    }
+
+    private String stripManabaTag(String subject) {
+        return subject
+                .replaceAll("(?i)\\[\\s*manaba\\s*\\]", "")
+                .replaceAll("(?i)【\\s*manaba\\s*】", "")
+                .replaceAll("^(?:リマインダ|お知らせ|通知)\\s*[:：]?\\s*", "")
+                .trim();
+    }
+
+    private String extractFirstMeaningfulLine(String body, String fallback) {
+        for (String line : body.split("\n")) {
+            String t = line.trim();
+            if (t.isBlank()
+                    || t.startsWith("http")
+                    || t.startsWith("-")
+                    || t.startsWith("=")
+                    || t.contains("manaba")
+                    || DATETIME_EXTRACT_PATTERN.matcher(t).find()) {
+                continue;
+            }
+            return t.length() > 60 ? t.substring(0, 60) : t;
+        }
+        return fallback;
     }
 
     private String detectTaskType(String subject, String body) {
@@ -989,6 +1211,14 @@ public class TaskFetchService {
             }
         }
         return null;
+    }
+
+    private boolean containsIgnoreCase(String text, String needle) {
+        return text != null && text.toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    private String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
     }
 
     private String generateUserId(String email) {

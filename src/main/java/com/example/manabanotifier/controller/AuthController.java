@@ -5,6 +5,7 @@ import com.example.manabanotifier.repository.UserRepository;
 import com.example.manabanotifier.service.TaskFetchService;
 import com.example.manabanotifier.service.TaskFetchService.GasFetchResult;
 import com.example.manabanotifier.service.TaskFetchService.GmailFetchException;
+import com.example.manabanotifier.service.TaskFetchService.ImportResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
@@ -41,7 +43,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 連携・ログイン（Google OAuth 2.0 / GAS ウェブアプリ / メール本文・JSON取込）・Web Push購読コントローラ（担当：大友）。
+ * 連携・ログイン（ブラウザ経由 GAS「自分のみ」公開 / Google OAuth 2.0 / GAS JSON 貼付）・Web Push購読コントローラ（担当：大友）。
  */
 @Controller
 public class AuthController {
@@ -51,6 +53,11 @@ public class AuthController {
     private static final String SESSION_USER_ID = "user_id";
     private static final String SESSION_USER_EMAIL = "user_email";
     private static final String SESSION_OAUTH_STATE = "oauth_state";
+    private static final String SESSION_PENDING_GAS_URL = "pending_gas_url";
+    private static final String SESSION_PENDING_EMAIL = "pending_email";
+    private static final String SESSION_SYNC_SCANNED = "lastSyncScannedCount";
+    private static final String SESSION_SYNC_SYNCED = "lastSyncSyncedCount";
+    private static final String SESSION_SYNC_SKIPPED = "lastSyncSkippedSamples";
     private static final String COOKIE_USER_ID = "user_id";
 
     private final UserRepository userRepository;
@@ -99,21 +106,24 @@ public class AuthController {
             model.addAttribute("errorMessage", "Google 連携に失敗しました。再度ログインしてください");
         } else if ("invalid_email".equals(error)) {
             model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
+        } else if ("gas_empty".equals(error)) {
+            model.addAttribute("errorMessage", "GAS から送信されたメールデータが空でした。もう一度お試しください。");
         } else if (error != null && !error.isBlank()) {
             model.addAttribute("errorMessage", "ログイン処理でエラーが発生しました。再度お試しください。");
         }
 
         if ("true".equals(oauthUnconfigured)) {
             model.addAttribute("infoMessage",
-                    "Google OAuth 2.0 のクライアントID / シークレットがまだ設定されていません。"
-                            + "下の『初回のみ：Google OAuth 2.0 設定』に保存するか、"
-                            + "設定不要の『方法②：Google Apps Script (GAS) 連携』をご利用ください。");
+                    "Google OAuth 2.0 のクライアントID / シークレットが未設定です。"
+                            + "大学アカウント等では設定不要の『方法①：GAS ブラウザ連携（自分のみ公開）』が最も簡単です。"
+                            + "OAuth 2.0 を使う場合は下の『方法②』からクライアントID/Secretを設定してください。");
             model.addAttribute("openOAuthSetup", true);
         }
 
         if ("true".equals(oauthSaved)) {
             model.addAttribute("successMessage",
-                    "Google OAuth 2.0 設定を保存しました。上の「Google アカウントでログイン & Gmail 連携」ボタンから認証できます。");
+                    "Google OAuth 2.0 設定を保存しました。方法②の「Google アカウントでログイン & Gmail 連携」ボタンから認証できます。");
+            model.addAttribute("openOAuthSetup", true);
         }
 
         if ("true".equals(logout)) {
@@ -122,6 +132,161 @@ public class AuthController {
 
         populateLoginModel(model);
         return "login";
+    }
+
+    /**
+     * 方法①（最推奨）：ブラウザ経由 GAS 連携（アクセス権限：「自分のみ」対応）を開始し、GAS ウェブアプリへ 302 リダイレクトする。
+     */
+    @PostMapping("/auth/gas-browser-start")
+    public String startGasBrowserFlow(
+            @RequestParam String gasUrl,
+            @RequestParam(required = false) String email,
+            HttpSession session,
+            Model model) {
+
+        String trimmedUrl = gasUrl != null ? gasUrl.trim() : "";
+        String trimmedEmail = (email != null && !email.isBlank()) ? email.trim().toLowerCase() : null;
+
+        if (trimmedUrl.isBlank() || (!trimmedUrl.startsWith("https://") && !trimmedUrl.startsWith("http://"))) {
+            model.addAttribute("errorMessage", "有効な GAS ウェブアプリ URL（https://script.google.com/macros/s/.../exec）を入力してください。");
+            model.addAttribute("attemptedGasUrl", trimmedUrl);
+            model.addAttribute("attemptedEmail", trimmedEmail);
+            populateLoginModel(model);
+            return "login";
+        }
+
+        session.setAttribute(SESSION_PENDING_GAS_URL, trimmedUrl);
+        if (trimmedEmail != null) {
+            session.setAttribute(SESSION_PENDING_EMAIL, trimmedEmail);
+        } else {
+            session.removeAttribute(SESSION_PENDING_EMAIL);
+        }
+
+        String redirectTarget = buildGasBrowserRedirectUrl(trimmedUrl, trimmedEmail);
+        return "redirect:" + redirectTarget;
+    }
+
+    /**
+     * 方法①コールバック：Google にログイン済みのユーザーブラウザが GAS HTML フォームから POST 送信した JSON ペイロードを受け取る。
+     */
+    @PostMapping("/auth/gas-callback")
+    public String handleGasBrowserCallback(
+            @RequestParam(required = false) String payload,
+            HttpSession session,
+            @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
+            HttpServletResponse response,
+            RedirectAttributes redirectAttributes,
+            Model model) {
+
+        if (payload == null || payload.isBlank()) {
+            return "redirect:/login?error=gas_empty";
+        }
+
+        ImportResult meta = taskFetchService.peekGasPayloadMetadata(payload);
+        User existingSessionUser = resolveExistingUser(session, cookieUserId);
+
+        String pendingEmail = getSessionString(session, SESSION_PENDING_EMAIL);
+        String pendingGasUrl = getSessionString(session, SESSION_PENDING_GAS_URL);
+
+        String resolvedGasUrl = firstNonBlank(
+                meta.getDetectedGasUrl(),
+                pendingGasUrl,
+                existingSessionUser != null ? existingSessionUser.getGasUrl() : null
+        );
+        String resolvedEmail = firstNonBlank(
+                meta.getDetectedEmail(),
+                pendingEmail,
+                existingSessionUser != null ? existingSessionUser.getEmail() : null,
+                "gas-" + shortHash(resolvedGasUrl != null ? resolvedGasUrl : payload) + "@manaba-sync.local"
+        ).toLowerCase();
+
+        String resolvedName = resolvedEmail.contains("@")
+                ? resolvedEmail.substring(0, resolvedEmail.indexOf('@'))
+                : resolvedEmail;
+        String userId = generateUserId(resolvedEmail);
+
+        try {
+            User user = upsertUser(userId, resolvedEmail, resolvedName, null, null, resolvedGasUrl, null, "GAS_BROWSER");
+            establishLoginSession(user, session, response);
+
+            ImportResult result = taskFetchService.importFromGasPayload(user.getUserId(), payload);
+            saveSyncDiagnostics(session, result);
+            session.removeAttribute(SESSION_PENDING_GAS_URL);
+            session.removeAttribute(SESSION_PENDING_EMAIL);
+
+            if (result.getSyncedCount() > 0) {
+                redirectAttributes.addFlashAttribute("successMessage",
+                        "GAS（" + resolvedEmail + "）から " + result.getScannedEmailCount()
+                                + " 件のメールをスキャンし、" + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
+            } else {
+                redirectAttributes.addFlashAttribute("infoMessage",
+                        "GAS（" + resolvedEmail + "）から " + result.getScannedEmailCount()
+                                + " 件のメールをスキャンしましたが、自動登録できた小テストは 0 件でした（スキップ "
+                                + result.getSkippedSamples().size() + " 件）。デバッグパネルでメール形式を確認してください。");
+            }
+            return "redirect:/tasks?synced=true";
+        } catch (GmailFetchException ex) {
+            model.addAttribute("errorMessage", ex.getMessage());
+            model.addAttribute("attemptedGasUrl", resolvedGasUrl);
+            model.addAttribute("attemptedEmail", resolvedEmail);
+            populateLoginModel(model);
+            return "login";
+        }
+    }
+
+    /**
+     * 方法③：GAS 出力 JSON を直接貼り付けてログイン＆取り込みを行う。
+     */
+    @PostMapping("/auth/gas-json-login")
+    public String loginWithGasJson(
+            @RequestParam String jsonPayload,
+            @RequestParam(required = false) String email,
+            @RequestParam(required = false) String displayName,
+            HttpSession session,
+            HttpServletResponse response,
+            RedirectAttributes redirectAttributes,
+            Model model) {
+
+        if (jsonPayload == null || jsonPayload.isBlank()) {
+            model.addAttribute("errorMessage", "GAS が出力した JSON データを貼り付けてください。");
+            populateLoginModel(model);
+            return "login";
+        }
+
+        ImportResult meta = taskFetchService.peekGasPayloadMetadata(jsonPayload);
+        String resolvedEmail = firstNonBlank(
+                email != null ? email.trim().toLowerCase() : null,
+                meta.getDetectedEmail(),
+                "gas-json-" + shortHash(jsonPayload) + "@manaba-sync.local"
+        );
+        String resolvedName = (displayName != null && !displayName.isBlank())
+                ? displayName.trim()
+                : (resolvedEmail.contains("@") ? resolvedEmail.substring(0, resolvedEmail.indexOf('@')) : resolvedEmail);
+        String userId = generateUserId(resolvedEmail);
+
+        try {
+            User user = upsertUser(userId, resolvedEmail, resolvedName, null, null, meta.getDetectedGasUrl(), null, "GAS_JSON");
+            establishLoginSession(user, session, response);
+
+            ImportResult result = taskFetchService.importFromGasPayload(user.getUserId(), jsonPayload);
+            saveSyncDiagnostics(session, result);
+
+            if (result.getSyncedCount() > 0) {
+                redirectAttributes.addFlashAttribute("successMessage",
+                        "GAS JSON（" + resolvedEmail + "）から " + result.getScannedEmailCount()
+                                + " 件中 " + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
+            } else {
+                redirectAttributes.addFlashAttribute("infoMessage",
+                        "GAS JSON（" + result.getScannedEmailCount()
+                                + " 件）を読み込みましたが、自動登録できた小テストは 0 件でした。デバッグパネルを確認してください。");
+            }
+            return "redirect:/tasks?synced=true";
+        } catch (GmailFetchException ex) {
+            model.addAttribute("errorMessage", ex.getMessage());
+            model.addAttribute("attemptedEmail", email);
+            populateLoginModel(model);
+            return "login";
+        }
     }
 
     /**
@@ -145,7 +310,7 @@ public class AuthController {
     }
 
     /**
-     * 方法①：本物の Google OAuth 2.0 認可開始エンドポイント。
+     * 方法②：本物の Google OAuth 2.0 認可開始エンドポイント。
      */
     @GetMapping("/auth/google")
     public String startGoogleOAuth(HttpSession session) {
@@ -171,7 +336,7 @@ public class AuthController {
     }
 
     /**
-     * 方法①：本物の Google OAuth 2.0 コールバック処理。
+     * 方法②：本物の Google OAuth 2.0 コールバック処理。
      */
     @GetMapping("/auth/callback")
     public String handleGoogleCallback(
@@ -261,7 +426,7 @@ public class AuthController {
     }
 
     /**
-     * 方法①-B：OAuth 2.0 Playground 等で取得した Gmail API アクセストークン（ya29...）で即時連携する。
+     * 方法②-B：OAuth 2.0 Playground 等で取得した Gmail API アクセストークン（ya29...）で即時連携する。
      */
     @PostMapping("/auth/oauth-token")
     public String loginWithOAuthToken(
@@ -310,7 +475,7 @@ public class AuthController {
     }
 
     /**
-     * 方法②：Google Apps Script (GAS) ウェブアプリ連携ログイン。
+     * サーバ直接呼び出しによる GAS ウェブアプリ連携（互換性維持）。
      */
     @PostMapping("/auth/gas-login")
     public String loginWithGas(
@@ -346,20 +511,13 @@ public class AuthController {
             );
             establishLoginSession(user, session, response);
 
-            if (result.getSyncedCount() > 0) {
-                redirectAttributes.addFlashAttribute("successMessage",
-                        "GAS ウェブアプリ（" + resolvedEmail + "）から "
-                                + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
-            } else {
-                redirectAttributes.addFlashAttribute("infoMessage",
-                        "GAS ウェブアプリ（" + resolvedEmail + "）に接続しました（メール "
-                                + result.getTotalMessages() + " 件中、取り込み対象の小テストは 0 件でした）。");
-            }
+            redirectAttributes.addFlashAttribute("successMessage",
+                    "GAS ウェブアプリ（" + resolvedEmail + "）から "
+                            + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
             return "redirect:/tasks?synced=true";
         } catch (GmailFetchException ex) {
             model.addAttribute("errorMessage", ex.getMessage());
             model.addAttribute("attemptedGasUrl", trimmedUrl);
-            model.addAttribute("attemptedGasToken", trimmedToken);
             model.addAttribute("attemptedEmail", trimmedEmail);
             populateLoginModel(model);
             return "login";
@@ -399,7 +557,7 @@ public class AuthController {
     }
 
     /**
-     * 貼り付けられた manaba 通知メール本文または GAS exportManabaJson() JSON を解析して登録する。
+     * 貼り付けられた manaba 通知メール本文または GAS JSON を解析して登録する。
      */
     @PostMapping("/auth/import-email")
     public String importEmailText(
@@ -420,6 +578,26 @@ public class AuthController {
             redirectAttributes.addFlashAttribute("errorMessage",
                     "取り込む manaba 通知メール本文または GAS JSON を入力してください。");
             return "redirect:/tasks";
+        }
+
+        String trimmed = text.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            try {
+                ImportResult result = taskFetchService.importFromGasPayload(userId, trimmed);
+                saveSyncDiagnostics(session, result);
+                if (result.getSyncedCount() == 0) {
+                    redirectAttributes.addFlashAttribute("infoMessage",
+                            "JSON（" + result.getScannedEmailCount()
+                                    + " 件）を読み込みましたが、自動登録できた小テストは 0 件でした。デバッグパネルで形式を確認してください。");
+                } else {
+                    redirectAttributes.addFlashAttribute("successMessage",
+                            "GAS JSON から " + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
+                }
+                return "redirect:/tasks";
+            } catch (GmailFetchException ex) {
+                redirectAttributes.addFlashAttribute("errorMessage", ex.getMessage());
+                return "redirect:/tasks";
+            }
         }
 
         int count = taskFetchService.importFromRawEmailText(userId, text);
@@ -487,7 +665,7 @@ public class AuthController {
     }
 
     /**
-     * 連携済み方式（Google OAuth 2.0 または GAS ウェブアプリ）から小テストメールの手動同期を実行する。
+     * 連携済み方式（ブラウザ経由 GAS「自分のみ」 / Google OAuth 2.0 / GAS URL）から手動同期を実行する。
      */
     @PostMapping("/auth/fetch-tasks")
     public String fetchTasksManually(
@@ -496,8 +674,22 @@ public class AuthController {
             RedirectAttributes redirectAttributes) {
 
         String userId = resolveAuthenticatedUserId(session, cookieUserId);
-        if (userId == null || userRepository.findById(userId).isEmpty()) {
+        if (userId == null) {
             return "redirect:/login";
+        }
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            return "redirect:/login";
+        }
+
+        User user = userOpt.get();
+        if ("GAS_BROWSER".equalsIgnoreCase(user.getAuthType())
+                && user.getGasUrl() != null && !user.getGasUrl().isBlank()) {
+            session.setAttribute(SESSION_PENDING_GAS_URL, user.getGasUrl());
+            if (user.getEmail() != null) {
+                session.setAttribute(SESSION_PENDING_EMAIL, user.getEmail());
+            }
+            return "redirect:" + buildGasBrowserRedirectUrl(user.getGasUrl(), user.getEmail());
         }
 
         try {
@@ -528,15 +720,60 @@ public class AuthController {
         return "redirect:/login?logout=true";
     }
 
+    private String buildGasBrowserRedirectUrl(String gasUrl, String email) {
+        String origin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        String callback = origin + "/auth/gas-callback";
+
+        String separator = gasUrl.contains("?") ? "&" : "?";
+        StringBuilder sb = new StringBuilder(gasUrl);
+        sb.append(separator).append("callback=").append(urlEncode(callback));
+        sb.append("&gasUrl=").append(urlEncode(gasUrl));
+        if (email != null && !email.isBlank()) {
+            sb.append("&email=").append(urlEncode(email));
+        }
+        return sb.toString();
+    }
+
+    private void saveSyncDiagnostics(HttpSession session, ImportResult result) {
+        session.setAttribute(SESSION_SYNC_SCANNED, result.getScannedEmailCount());
+        session.setAttribute(SESSION_SYNC_SYNCED, result.getSyncedCount());
+        session.setAttribute(SESSION_SYNC_SKIPPED, result.getSkippedSamples());
+    }
+
     private void populateLoginModel(Model model) {
         model.addAttribute("oauthConfigured", taskFetchService.isOAuthConfigured());
         model.addAttribute("oauthRedirectUri", taskFetchService.getOAuthRedirectUri());
         model.addAttribute("oauthClientId", taskFetchService.getOAuthClientId());
     }
 
+    private User resolveExistingUser(HttpSession session, String cookieUserId) {
+        String userId = resolveAuthenticatedUserId(session, cookieUserId);
+        if (userId == null) {
+            return null;
+        }
+        return userRepository.findById(userId).orElse(null);
+    }
+
+    private String getSessionString(HttpSession session, String key) {
+        if (session == null) {
+            return null;
+        }
+        Object val = session.getAttribute(key);
+        if (val == null) {
+            return null;
+        }
+        String s = String.valueOf(val).trim();
+        return s.isEmpty() ? null : s;
+    }
+
     private String generateUserId(String email) {
         return "user-" + UUID.nameUUIDFromBytes(email.getBytes(StandardCharsets.UTF_8))
                 .toString().substring(0, 12);
+    }
+
+    private String shortHash(String value) {
+        return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8))
+                .toString().substring(0, 8);
     }
 
     private User upsertUser(
