@@ -159,3 +159,5 @@ cd manaba-notifier
 - [C: 通知設定（宮川）](docs/C_miyakawa_settings.md)
 - [D: 通知送信・通知履歴／再試行（川邉）](docs/D_kawabe_notification_history.md)
 - [発表・質疑応答ガイド（4人分まとめ）](docs/PRESENTATION_GUIDE.md)
+- [複数人利用・公開デプロイガイド（Render / Railway / Cloudflare Tunnel + 共有 GAS）](docs/DEPLOY_MULTI_USER.md)
+- [セキュリティ診断・脆弱性修正レポート](docs/SECURITY_AUDIT.md)

@@ -1,6 +1,8 @@
 package com.example.manabanotifier;
 
+import com.example.manabanotifier.entity.Task;
 import com.example.manabanotifier.entity.User;
+import com.example.manabanotifier.repository.TaskRepository;
 import com.example.manabanotifier.repository.UserRepository;
 import com.example.manabanotifier.security.SecurityFilter;
 import com.example.manabanotifier.security.SecurityUtils;
@@ -14,21 +16,27 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * セキュリティ修正の自動回帰テスト（認証偽装・SSRF・Open Redirect・CSRF・OAuth state・セキュリティヘッダ・GAS連携）。
+ * セキュリティ修正およびマルチユーザー分離の自動回帰テスト。
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:sectestdb;DB_CLOSE_DELAY=-1",
-        "spring.h2.console.enabled=false"
+        "spring.h2.console.enabled=false",
+        "app.gas.shared-url=https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec"
 })
 class SecurityHardeningTest {
 
@@ -37,6 +45,9 @@ class SecurityHardeningTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private TaskRepository taskRepository;
 
     @Test
     void unsignedUserIdCookieCannotBypassAuthentication() throws Exception {
@@ -213,5 +224,94 @@ class SecurityHardeningTest {
         mockMvc.perform(get("/auth/callback").param("code", "fake-code"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login?error=oauth_failed"));
+    }
+
+    @Test
+    void sharedGasOneClickLoginAndMultiUserIsolationWork() throws Exception {
+        // 1. 共有 GAS URL 設定済み時に /login に 1 クリックログインボタンが表示されること
+        MvcResult loginPage = mockMvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("大学 Google アカウントでログイン")))
+                .andReturn();
+        MockHttpSession startSession = (MockHttpSession) loginPage.getRequest().getSession(false);
+        String csrf = (String) startSession.getAttribute(SecurityFilter.SESSION_CSRF_TOKEN);
+
+        // 2. 1クリックボタン（POST /auth/gas-shared-start）が共有 GAS URL + returnUrl + gasState へ遷移すること
+        MvcResult redirectRes = mockMvc.perform(post("/auth/gas-shared-start")
+                        .session(startSession)
+                        .param("_csrf", csrf))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String location = redirectRes.getResponse().getRedirectedUrl();
+        assertThat(location).startsWith("https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec");
+        assertThat(location).contains("returnUrl=");
+        assertThat(location).contains("gasState=");
+
+        // 3. 学生A と 学生B がそれぞれ共有 GAS 経由でログインし、データが完全に分離されること
+        String payloadA = """
+                {
+                  "email": "studentA@chibatech.ac.jp",
+                  "gasUrl": "https://script.google.com/a/chibatech.ac.jp/macros/s/AKfycbySharedMultiUser12345/exec",
+                  "emails": [{
+                    "subject": "[manaba] 小テスト公開のお知らせ",
+                    "from": "manaba <do-not-reply@manaba.jp>",
+                    "body": "[コース名] : 学生A専用科目\\n[小テスト名] : 学生A専用小テスト\\n[受付開始日時] : 2026-11-19 10:00\\n[受付終了日時] : 2026-11-26 23:59\\nPC : https://cit.manaba.jp/ct/course_100_query_101"
+                  }]
+                }
+                """;
+        String payloadB = """
+                {
+                  "email": "studentB@chibatech.ac.jp",
+                  "gasUrl": "https://script.google.com/a/chibatech.ac.jp/macros/s/AKfycbySharedMultiUser12345/exec",
+                  "emails": [{
+                    "subject": "[manaba] 小テスト公開のお知らせ",
+                    "from": "manaba <do-not-reply@manaba.jp>",
+                    "body": "[コース名] : 学生B専用科目\\n[小テスト名] : 学生B専用小テスト\\n[受付開始日時] : 2026-11-19 10:00\\n[受付終了日時] : 2026-11-26 23:59\\nPC : https://cit.manaba.jp/ct/course_200_query_202"
+                  }]
+                }
+                """;
+
+        MockHttpSession sessionA = (MockHttpSession) mockMvc.perform(post("/auth/gas-callback")
+                        .header("Origin", "null")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Dest", "document")
+                        .param("payload", payloadA))
+                .andExpect(status().is3xxRedirection())
+                .andReturn().getRequest().getSession(false);
+
+        MockHttpSession sessionB = (MockHttpSession) mockMvc.perform(post("/auth/gas-callback")
+                        .header("Origin", "null")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Dest", "document")
+                        .param("payload", payloadB))
+                .andExpect(status().is3xxRedirection())
+                .andReturn().getRequest().getSession(false);
+
+        // 学生A の一覧には学生Aの小テストのみ表示され、学生Bの情報は一切見えないこと
+        mockMvc.perform(get("/tasks").session(sessionA))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("学生A専用小テスト")))
+                .andExpect(content().string(not(containsString("学生B専用小テスト"))));
+
+        // 学生B の一覧には学生Bの小テストのみ表示され、学生Aの情報は一切見えないこと
+        mockMvc.perform(get("/tasks").session(sessionB))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("学生B専用小テスト")))
+                .andExpect(content().string(not(containsString("学生A専用小テスト"))));
+
+        // 学生B が 学生A の taskId を指定して提出済みに改ざんしようとしても拒否されること
+        String userIdA = (String) sessionA.getAttribute("user_id");
+        List<Task> tasksA = taskRepository.findByUserIdOrderByDeadlineAsc(userIdA);
+        assertThat(tasksA).hasSize(1);
+        Long taskAId = tasksA.get(0).getTaskId();
+        String csrfB = (String) sessionB.getAttribute(SecurityFilter.SESSION_CSRF_TOKEN);
+
+        mockMvc.perform(post("/tasks/" + taskAId + "/submit")
+                        .session(sessionB)
+                        .param("_csrf", csrfB))
+                .andExpect(status().is3xxRedirection());
+
+        Task taskAAfter = taskRepository.findById(taskAId).orElseThrow();
+        assertThat(taskAAfter.isSubmitted()).isFalse();
     }
 }

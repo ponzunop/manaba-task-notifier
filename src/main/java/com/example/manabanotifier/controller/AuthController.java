@@ -17,6 +17,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -72,6 +73,9 @@ public class AuthController {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    @Value("${app.public-mode:false}")
+    private boolean publicMode;
+
     public AuthController(
             UserRepository userRepository,
             TaskFetchService taskFetchService,
@@ -90,6 +94,7 @@ public class AuthController {
             @RequestParam(required = false) String logout,
             @RequestParam(name = "oauth_unconfigured", required = false) String oauthUnconfigured,
             @RequestParam(name = "oauth_saved", required = false) String oauthSaved,
+            @RequestParam(name = "shared_gas_saved", required = false) String sharedGasSaved,
             HttpSession session,
             HttpServletResponse response,
             Model model) {
@@ -132,12 +137,73 @@ public class AuthController {
             model.addAttribute("openOAuthSetup", true);
         }
 
+        if ("true".equals(sharedGasSaved)) {
+            model.addAttribute("successMessage",
+                    "大学内共有 GAS ウェブアプリ URL を保存しました。これで他の学生も1クリックでログイン＆小テスト取得できます！");
+        }
+
         if ("true".equals(logout)) {
             model.addAttribute("logoutMessage", "ログアウトしました。");
         }
 
         populateLoginModel(model);
         return "login";
+    }
+
+    /**
+     * マルチユーザー共有モード：管理者が登録済みの共有 GAS ウェブアプリ（「アクセスしているユーザーとして実行」）を使って
+     * 他の学生が設定不要・1クリックで自分の Gmail から小テストを取得＆ログインする。
+     */
+    @PostMapping("/auth/gas-shared-start")
+    public String startSharedGasBrowserFlow(
+            HttpSession session,
+            Model model) {
+
+        String sharedUrl = taskFetchService.getSharedGasUrl();
+        if (!SecurityUtils.isValidGoogleAppsScriptUrl(sharedUrl)) {
+            model.addAttribute("errorMessage", "共有 GAS ウェブアプリ URL が設定されていません。下の設定パネルから設定してください。");
+            populateLoginModel(model);
+            return "login";
+        }
+
+        session.setAttribute(SESSION_PENDING_GAS_URL, sharedUrl);
+        session.removeAttribute(SESSION_PENDING_EMAIL);
+
+        String gasState = registerPendingGasFlow(sharedUrl, null);
+        return "redirect:" + buildGasBrowserRedirectUrl(sharedUrl, null, gasState);
+    }
+
+    /**
+     * ローカル環境から大学内共有 GAS ウェブアプリ URL を保存する（サーバ再起動不要）。
+     */
+    @PostMapping("/auth/shared-gas-config")
+    public String saveSharedGasConfig(
+            @RequestParam String sharedGasUrl,
+            HttpServletRequest request,
+            HttpSession session,
+            Model model) {
+
+        if (!SecurityUtils.isLoopbackAddress(request.getRemoteAddr())) {
+            model.addAttribute("errorMessage",
+                    "セキュリティ保護のため、共有 GAS URL の画面変更はローカル環境（localhost）からのみ許可されています。クラウド公開時は環境変数 SHARED_GAS_URL を設定してください。");
+            populateLoginModel(model);
+            return "login";
+        }
+        if (taskFetchService.isSharedGasConfigured() && resolveAuthenticatedUserId(session) == null) {
+            model.addAttribute("errorMessage",
+                    "共有 GAS URL は既に設定済みです。変更するにはログインした状態で更新するか、環境変数 SHARED_GAS_URL を設定してください。");
+            populateLoginModel(model);
+            return "login";
+        }
+
+        try {
+            taskFetchService.saveSharedGasUrl(sharedGasUrl);
+            return "redirect:/login?shared_gas_saved=true";
+        } catch (IllegalArgumentException | IOException ex) {
+            model.addAttribute("errorMessage", ex.getMessage());
+            populateLoginModel(model);
+            return "login";
+        }
     }
 
     /**
@@ -589,6 +655,13 @@ public class AuthController {
             RedirectAttributes redirectAttributes,
             Model model) {
 
+        if (publicMode) {
+            model.addAttribute("errorMessage",
+                    "公開マルチユーザーモードでは、なりすまし防止のためメール連携なしの簡易ログインは無効化されています。大学 Google アカウント（GAS連携 / Google OAuth 2.0）からログインしてください。");
+            populateLoginModel(model);
+            return "login";
+        }
+
         if (email == null || email.isBlank() || !email.contains("@") || email.trim().length() > 254) {
             model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
             populateLoginModel(model);
@@ -842,8 +915,18 @@ public class AuthController {
     }
 
     private void populateLoginModel(Model model) {
+        String currentOrigin;
+        try {
+            currentOrigin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        } catch (Exception ex) {
+            currentOrigin = "http://localhost:8080";
+        }
+        model.addAttribute("appOrigin", currentOrigin);
+        model.addAttribute("sharedGasConfigured", taskFetchService.isSharedGasConfigured());
+        model.addAttribute("sharedGasUrl", taskFetchService.getSharedGasUrl());
+        model.addAttribute("publicMode", publicMode);
         model.addAttribute("oauthConfigured", taskFetchService.isOAuthConfigured());
-        model.addAttribute("oauthRedirectUri", taskFetchService.getOAuthRedirectUri());
+        model.addAttribute("oauthRedirectUri", currentOrigin + "/auth/callback");
         model.addAttribute("oauthClientId", taskFetchService.getOAuthClientId());
     }
 

@@ -1,0 +1,40 @@
+# Render Blueprint: GitHub リポジトリを連携するだけで HTTPS 公開 & PostgreSQL 永続化まで自動構築
+databases:
+  - name: manaba-notifier-db
+    plan: free
+    databaseName: manabadb
+    user: manaba_user
+
+services:
+  - type: web
+    name: manaba-task-notifier
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: SERVER_ADDRESS
+        value: "0.0.0.0"
+      - key: APP_PUBLIC_MODE
+        value: "true"
+      - key: DB_HOST
+        fromDatabase:
+          name: manaba-notifier-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: manaba-notifier-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: manaba-notifier-db
+          property: database
+      - key: SPRING_DATASOURCE_USERNAME
+        fromDatabase:
+          name: manaba-notifier-db
+          property: user
+      - key: SPRING_DATASOURCE_PASSWORD
+        fromDatabase:
+          name: manaba-notifier-db
+          property: password
+      - key: SHARED_GAS_URL
+        sync: false

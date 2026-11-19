@@ -20,11 +20,11 @@
 
 <main class="login-wrapper">
     <section class="login-hero">
-        <span class="badge badge-primary">ブラウザ経由 GAS（自分のみ公開）× Web Push 連携</span>
+        <span class="badge badge-primary">マルチユーザー対応（大学内共有 GAS / Google OAuth 2.0）× Web Push 連携</span>
         <h1>manaba の小テスト・課題締切を、あなたの Gmail から自動取得。</h1>
         <p>
-            大学 Google アカウント（<code>@chibatech.ac.jp</code> 等）でも組織制限に引っかからず、
-            <strong>Google Cloud 設定不要・GAS アクセス権限「自分のみ」</strong>で安全に小テスト情報を取得できます。
+            大学 Google アカウント（<code>@chibatech.ac.jp</code> 等）でログインするだけで、
+            <strong>あなた自身の Gmail に届いた manaba 小テスト情報</strong>だけを自動抽出し、締切前にリマインド通知します。
         </p>
     </section>
 
@@ -34,42 +34,79 @@
     <div th:if="${logoutMessage}" class="alert alert-success" th:text="${logoutMessage}"></div>
 
     <div class="login-main">
-        <!-- 左カラム：方法①（最推奨GASブラウザ連携）＋方法②・③ -->
+        <!-- 左カラム：共有ワンクリックログイン＋方法①・②・③ -->
         <div>
-            <!-- 方法①：Google Apps Script (GAS) ブラウザ連携（自分のみ公開） -->
-            <section class="card" style="border: 2px solid var(--primary);">
+            <!-- 共有 GAS 設定済み時：他の学生・スマホ利用者向けの 1 クリックログインカード -->
+            <section th:if="${sharedGasConfigured}" class="card" style="border: 2px solid var(--primary); background: linear-gradient(180deg, #eff6ff 0%, #ffffff 45%);">
                 <div class="card-header">
-                    <h2 class="card-title">方法①：GAS ブラウザ連携（大学アカウント対応・最推奨）</h2>
-                    <span class="badge badge-success">アクセス権限「自分のみ」でOK</span>
+                    <h2 class="card-title">大学 Google アカウントでログイン（設定不要・1クリック）</h2>
+                    <span class="badge badge-success">学内共有モード有効</span>
                 </div>
-
-                <p style="margin-top: 0; font-size: 0.9rem; color: var(--text);">
-                    Google にログイン済みのあなたのブラウザ経由で GAS を開くため、デプロイ時の
-                    <strong>「アクセスできるユーザー：自分のみ」（「全員」にする必要なし！）</strong>のまま動作します。
+                <p style="margin-top: 0; font-size: 0.92rem; color: var(--text);">
+                    下のボタンを押すと大学 Google アカウント（<code>@chibatech.ac.jp</code> 等）で本人確認が行われ、
+                    <strong>ログインしたご本人自身の Gmail</strong> から manaba の小テスト情報を自動取得します（他人のメールや課題は一切混ざりません）。
                 </p>
+                <form th:action="@{/auth/gas-shared-start}" method="post">
+                    <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                    <button type="submit" class="btn btn-primary btn-block" style="padding: 0.85rem 1.25rem; font-size: 1rem;">
+                        大学 Google アカウントでログイン &amp; 小テストを自動取得
+                    </button>
+                </form>
+                <p style="margin: 0.65rem 0 0; font-size: 0.8rem; color: var(--text-muted);">
+                    ※ 初回のみ Google の「Gmail 読み取り許可」確認画面が表示されます。許可すると自動でこのアプリへ戻ります。
+                </p>
+            </section>
 
-                <div style="padding: 0.85rem 1rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 1rem; font-size: 0.84rem;">
-                    <strong style="display: block; margin-bottom: 0.4rem; color: var(--primary-dark);">3ステップで連携（初回のみ約1分）</strong>
-                    <ol style="margin: 0 0 0.6rem 1.2rem; padding: 0; line-height: 1.75; color: var(--text);">
-                        <li><a href="https://script.google.com" target="_blank" rel="noopener noreferrer"><strong>Google Apps Script (script.google.com)</strong></a> を大学アカウントで開き、「新しいプロジェクト」を作成</li>
-                        <li>下の「GASコードをコピー」を押して貼り付け、保存（<code>Ctrl+S</code>）</li>
-                        <li>「デプロイ」→「新しいデプロイ」→ 種類の歯車「ウェブアプリ」を選択し、<br>
-                            <strong>次のユーザーとして実行：自分</strong> / <strong>アクセスできるユーザー：自分のみ</strong> でデプロイ → 表示された URL（<code>.../exec</code>）を下に貼り付け！
-                        </li>
-                    </ol>
-
-                    <details>
-                        <summary style="cursor: pointer; font-weight: 700; color: var(--primary-dark);">
-                            コピー用 GAS コードを表示（<code>doGet</code> ブラウザ自動送信 ＋ <code>exportManabaJson</code> 付き）
-                        </summary>
-                        <div style="display: flex; justify-content: flex-end; margin: 0.5rem 0 0.35rem;">
-                            <button type="button" class="btn btn-primary btn-sm"
-                                    onclick="copyElementText('gas-script-code', this)">
-                                GASコードをコピー
-                            </button>
+            <!-- 方法①：Google Apps Script (GAS) ブラウザ連携（共有デプロイ / 個人デプロイ対応） -->
+            <section class="card" th:style="${sharedGasConfigured} ? '' : 'border: 2px solid var(--primary);'">
+                <details th:open="${!sharedGasConfigured}">
+                    <summary style="cursor: pointer; list-style: none;">
+                        <div class="card-header" style="margin-bottom: 0.5rem;">
+                            <h2 class="card-title">
+                                <span th:if="${sharedGasConfigured}">管理者・個人用：GAS ウェブアプリ設定（共有URL変更 / 個別GASで使う）</span>
+                                <span th:unless="${sharedGasConfigured}">方法①：GAS ブラウザ連携（大学アカウント対応・複数人共有もOK）</span>
+                            </h2>
+                            <span class="badge badge-success">アプリパスワード不要</span>
                         </div>
-                        <pre id="gas-script-code"
-                             style="margin: 0; padding: 0.75rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.74rem; overflow-x: auto; line-height: 1.45;">function collectManabaMessages(paramEmail, paramGasUrl) {
+                    </summary>
+
+                    <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text);">
+                        Google にログイン済みのブラウザ経由で GAS を開くため、<strong>アプリパスワード・Google Cloud 設定は一切不要</strong>です。<br>
+                        <strong>他の人にも使ってもらう場合</strong>は、管理者が1つだけ GAS を<strong>「ウェブアプリにアクセスしているユーザーとして実行／組織内全員」</strong>でデプロイして共有 URL 登録すれば、他の学生は設定不要・1クリックで使えます！
+                    </p>
+
+                    <div style="padding: 0.85rem 1rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 1rem; font-size: 0.84rem;">
+                        <strong style="display: block; margin-bottom: 0.4rem; color: var(--primary-dark);">3ステップで GAS をデプロイ（初回のみ約1分）</strong>
+                        <ol style="margin: 0 0 0.6rem 1.2rem; padding: 0; line-height: 1.75; color: var(--text);">
+                            <li><a href="https://script.google.com" target="_blank" rel="noopener noreferrer"><strong>Google Apps Script (script.google.com)</strong></a> を大学アカウントで開き、「新しいプロジェクト」を作成</li>
+                            <li>下の「GASコードをコピー」を押して貼り付け、保存（<code>Ctrl+S</code>）</li>
+                            <li>「デプロイ」→「新しいデプロイ」→ 種類の歯車「ウェブアプリ」を選択し、用途に合わせて設定：<br>
+                                ・<strong>他の学生にも使わせる（推奨）：</strong>
+                                次のユーザーとして実行＝<strong>ウェブアプリにアクセスしているユーザー</strong> ／ アクセスできるユーザー＝<strong>千葉工業大学内の全員</strong><br>
+                                ・<strong>自分だけで試す：</strong>
+                                次のユーザーとして実行＝<strong>自分</strong> ／ アクセスできるユーザー＝<strong>自分のみ</strong>
+                            </li>
+                        </ol>
+
+                        <details>
+                            <summary style="cursor: pointer; font-weight: 700; color: var(--primary-dark);">
+                                コピー用 GAS コードを表示（複数人共有・公開HTTPS URL・<code>gasState</code> 保護対応）
+                            </summary>
+                            <div style="display: flex; justify-content: flex-end; margin: 0.5rem 0 0.35rem;">
+                                <button type="button" class="btn btn-primary btn-sm"
+                                        onclick="copyElementText('gas-script-code', this)">
+                                    GASコードをコピー
+                                </button>
+                            </div>
+                            <pre id="gas-script-code"
+                                 style="margin: 0; padding: 0.75rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.74rem; overflow-x: auto; line-height: 1.45;">// 許可されたアプリ本体オリジンのみコールバックを許可（データ流出防止）
+var ALLOWED_ORIGINS = [
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
+  '__APP_ORIGIN__'
+];
+
+function collectManabaMessages(paramEmail, paramGasUrl) {
   var query = '(from:do-not-reply@manaba.jp OR from:manaba OR manaba) -コースニュース掲示のお知らせ -コースニュース';
   var threads = GmailApp.search(query, 0, 50);
   var emails = [];
@@ -101,11 +138,23 @@ function escapeHtmlAttr(str) {
     .replace(/'/g, '&amp;#39;');
 }
 
+function resolveSafeReturnUrl(rawReturn) {
+  var fallback = '__APP_ORIGIN__/auth/gas-callback';
+  if (!rawReturn) {
+    return fallback;
+  }
+  for (var i = 0; i &lt; ALLOWED_ORIGINS.length; i++) {
+    var origin = ALLOWED_ORIGINS[i];
+    if (origin &amp;&amp; rawReturn === origin + '/auth/gas-callback') {
+      return rawReturn;
+    }
+  }
+  return fallback;
+}
+
 function doGet(e) {
-  var rawReturn = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.returnUrl) ? e.parameter.returnUrl : 'http://localhost:8080/auth/gas-callback';
-  var returnUrl = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/auth\/gas-callback$/.test(rawReturn)
-    ? rawReturn
-    : 'http://localhost:8080/auth/gas-callback';
+  var rawReturn = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.returnUrl) ? e.parameter.returnUrl : '';
+  var returnUrl = resolveSafeReturnUrl(rawReturn);
   var paramEmail = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.email) ? e.parameter.email : '';
   var paramGasUrl = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasUrl) ? e.parameter.gasUrl : '';
   var paramGasState = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasState) ? e.parameter.gasState : '';
@@ -113,13 +162,16 @@ function doGet(e) {
   var payload = collectManabaMessages(paramEmail, paramGasUrl);
   var payloadJson = JSON.stringify(payload);
   var count = payload.emails.length;
+  var activeEmail = payload.email || '確認済みGoogleアカウント';
 
   var html = '&lt;!DOCTYPE html&gt;&lt;html lang="ja"&gt;&lt;head&gt;&lt;meta charset="UTF-8"&gt;'
-    + '&lt;style&gt;body{font-family:sans-serif;max-width:540px;margin:40px auto;padding:20px;text-align:center;}'
-    + '.btn{background:#2563eb;color:#fff;border:none;padding:14px 22px;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;margin:8px;}'
-    + '.btn2{background:#e2e8f0;color:#0f172a;}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;'
+    + '&lt;meta name="viewport" content="width=device-width,initial-scale=1.0"&gt;'
+    + '&lt;style&gt;body{font-family:sans-serif;max-width:540px;margin:40px auto;padding:20px;text-align:center;color:#0f172a;}'
+    + '.btn{background:#2563eb;color:#fff;border:none;padding:14px 22px;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;margin:8px;width:100%;max-width:420px;}'
+    + '.btn2{background:#e2e8f0;color:#0f172a;}'
+    + '.meta{color:#475569;font-size:14px;margin-bottom:16px;}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;'
     + '&lt;h2&gt;manaba 通知メールを取得しました（' + count + '件）&lt;/h2&gt;'
-    + '&lt;p&gt;下の青いボタンを押してアプリへ送信・ログインしてください。&lt;/p&gt;'
+    + '&lt;p class="meta"&gt;ログインアカウント: &lt;strong&gt;' + escapeHtmlAttr(activeEmail) + '&lt;/strong&gt;&lt;br&gt;下の青いボタンを押してアプリへ送信・ログインしてください。&lt;/p&gt;'
     + '&lt;form id="syncForm" method="POST" action="' + escapeHtmlAttr(returnUrl) + '" target="_top"&gt;'
     + '&lt;input type="hidden" name="payload" value="' + escapeHtmlAttr(payloadJson) + '"&gt;'
     + (paramGasState ? '&lt;input type="hidden" name="gasState" value="' + escapeHtmlAttr(paramGasState) + '"&gt;' : '')
@@ -139,27 +191,46 @@ function doGet(e) {
 function exportManabaJson() {
   Logger.log(JSON.stringify(collectManabaMessages('', '')));
 }</pre>
-                    </details>
-                </div>
+                        </details>
+                    </div>
 
-                <form th:action="@{/auth/gas-browser-start}" method="post">
-                    <input type="hidden" name="_csrf" th:value="${csrfToken}">
-                    <div class="form-group">
-                        <label for="gasUrl" class="form-label">GAS ウェブアプリ URL（自分のみ公開でOK） <span style="color: var(--danger);">*</span></label>
-                        <input type="url" id="gasUrl" name="gasUrl" class="form-control"
-                               th:value="${attemptedGasUrl}" autocomplete="off"
-                               placeholder="https://script.google.com/a/macros/大学ドメイン/s/.../exec または .../macros/s/.../exec" required>
+                    <!-- 管理者用：共有 GAS URL の登録（ローカル環境用。クラウドでは環境変数 SHARED_GAS_URL を設定） -->
+                    <div th:if="${!publicMode}" style="padding: 0.8rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; margin-bottom: 1rem;">
+                        <div style="font-weight: 700; font-size: 0.86rem; color: #166534; margin-bottom: 0.35rem;">
+                            他の人も1クリックで使える「学内共有 GAS URL」を登録（任意）
+                        </div>
+                        <p style="margin: 0 0 0.55rem; font-size: 0.8rem; color: #15803d;">
+                            「ウェブアプリにアクセスしているユーザーとして実行／大学内の全員」でデプロイした URL を登録すると、トップに全員向けの1クリックログインボタンが表示されます（Render/Railway 公開時は環境変数 <code>SHARED_GAS_URL</code> に設定）。
+                        </p>
+                        <form th:action="@{/auth/shared-gas-config}" method="post" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                            <input type="url" name="sharedGasUrl" class="form-control" style="flex: 1; min-width: 220px;"
+                                   th:value="${sharedGasUrl}" autocomplete="off"
+                                   placeholder="https://script.google.com/a/macros/chibatech.ac.jp/s/.../exec" required>
+                            <button type="submit" class="btn btn-secondary btn-sm">共有URLとして保存</button>
+                        </form>
                     </div>
-                    <div class="form-group">
-                        <label for="gas-email" class="form-label">メールアドレス（任意・未入力時は GAS から自動検出）</label>
-                        <input type="email" id="gas-email" name="email" class="form-control"
-                               th:value="${attemptedEmail}" autocomplete="email"
-                               placeholder="例: s24g3128zz@chibatech.ac.jp">
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-block">
-                        GAS を開いて自分の Gmail から小テストを取得＆ログイン
-                    </button>
-                </form>
+
+                    <!-- 個別 GAS URL でログイン -->
+                    <form th:action="@{/auth/gas-browser-start}" method="post">
+                        <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                        <div class="form-group">
+                            <label for="gasUrl" class="form-label">GAS ウェブアプリ URL（自分のみ / 学内全員 どちらでもOK） <span style="color: var(--danger);">*</span></label>
+                            <input type="url" id="gasUrl" name="gasUrl" class="form-control"
+                                   th:value="${attemptedGasUrl}" autocomplete="off"
+                                   placeholder="https://script.google.com/a/macros/大学ドメイン/s/.../exec または .../macros/s/.../exec" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="gas-email" class="form-label">メールアドレス（任意・未入力時は GAS から自動検出）</label>
+                            <input type="email" id="gas-email" name="email" class="form-control"
+                                   th:value="${attemptedEmail}" autocomplete="email"
+                                   placeholder="例: s24g3128zz@chibatech.ac.jp">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">
+                            GAS を開いて自分の Gmail から小テストを取得＆ログイン
+                        </button>
+                    </form>
+                </details>
             </section>
 
             <!-- 方法②（折りたたみ）：Google OAuth 2.0 + Gmail API -->
@@ -266,26 +337,28 @@ function exportManabaJson() {
                             </button>
                         </form>
 
-                        <div class="divider"><span>または メール連携をスキップしてログイン</span></div>
+                        <div th:if="${!publicMode}">
+                            <div class="divider"><span>または メール連携をスキップしてログイン（ローカル開発用）</span></div>
 
-                        <form th:action="@{/auth/login}" method="post">
-                            <input type="hidden" name="_csrf" th:value="${csrfToken}">
-                            <div class="grid-2">
-                                <div class="form-group">
-                                    <label for="manual-email" class="form-label">メールアドレス <span style="color: var(--danger);">*</span></label>
-                                    <input type="email" id="manual-email" name="email" class="form-control"
-                                           th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                            <form th:action="@{/auth/login}" method="post">
+                                <input type="hidden" name="_csrf" th:value="${csrfToken}">
+                                <div class="grid-2">
+                                    <div class="form-group">
+                                        <label for="manual-email" class="form-label">メールアドレス <span style="color: var(--danger);">*</span></label>
+                                        <input type="email" id="manual-email" name="email" class="form-control"
+                                               th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="manual-name" class="form-label">表示名（任意）</label>
+                                        <input type="text" id="manual-name" name="displayName" class="form-control"
+                                               placeholder="未入力時は自動設定">
+                                    </div>
                                 </div>
-                                <div class="form-group">
-                                    <label for="manual-name" class="form-label">表示名（任意）</label>
-                                    <input type="text" id="manual-name" name="displayName" class="form-control"
-                                           placeholder="未入力時は自動設定">
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn-outline btn-sm btn-block">
-                                連携なしでログイン（あとでメール本文貼り付け／手動追加）
-                            </button>
-                        </form>
+                                <button type="submit" class="btn btn-outline btn-sm btn-block">
+                                    連携なしでログイン（あとでメール本文貼り付け／手動追加）
+                                </button>
+                            </form>
+                        </div>
                     </div>
                 </details>
 
@@ -359,6 +432,13 @@ function exportManabaJson() {
 
 <script th:src="@{/js/push-client.js}"></script>
 <script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const gasPre = document.getElementById("gas-script-code");
+        if (gasPre && window.location && window.location.origin) {
+            gasPre.textContent = gasPre.textContent.replaceAll("__APP_ORIGIN__", window.location.origin);
+        }
+    });
+
     function copyElementText(elementId, buttonEl) {
         const target = document.getElementById(elementId);
         if (!target) return;

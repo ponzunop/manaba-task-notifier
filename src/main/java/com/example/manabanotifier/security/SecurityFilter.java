@@ -39,7 +39,7 @@ public class SecurityFilter extends OncePerRequestFilter {
                     + "script-src 'self' 'unsafe-inline'; "
                     + "img-src 'self' data:; "
                     + "connect-src 'self'; "
-                    + "form-action 'self' https://script.google.com https://accounts.google.com; "
+                    + "form-action 'self' https://script.google.com https://accounts.google.com https://*.googleusercontent.com; "
                     + "frame-ancestors 'none'; "
                     + "base-uri 'self'";
 

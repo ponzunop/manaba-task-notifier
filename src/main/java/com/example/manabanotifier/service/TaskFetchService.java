@@ -59,6 +59,7 @@ public class TaskFetchService {
     private static final int MAX_IMPORT_EMAILS = 200;
     private static final int MAX_GAS_REDIRECTS = 5;
     private static final Path OAUTH_CONFIG_PATH = Paths.get("config", "google-oauth.properties");
+    private static final Path SHARED_GAS_CONFIG_PATH = Paths.get("config", "shared-gas.properties");
     private static final String GMAIL_SEARCH_QUERY =
             "from:do-not-reply@manaba.jp OR manaba OR (小テスト (受付終了 OR 締切 OR コース))";
 
@@ -117,8 +118,12 @@ public class TaskFetchService {
     @Value("${google.oauth.redirect-uri:http://localhost:8080/auth/callback}")
     private String configuredRedirectUri;
 
+    @Value("${app.gas.shared-url:}")
+    private String configuredSharedGasUrl;
+
     private volatile String dynamicClientId = "";
     private volatile String dynamicClientSecret = "";
+    private volatile String dynamicSharedGasUrl = "";
 
     public TaskFetchService(
             TaskRepository taskRepository,
@@ -138,6 +143,7 @@ public class TaskFetchService {
 
     @PostConstruct
     public void loadOAuthConfigFromFile() {
+        loadSharedGasConfigFromFile();
         if (!Files.exists(OAUTH_CONFIG_PATH)) {
             return;
         }
@@ -154,6 +160,63 @@ public class TaskFetchService {
         } catch (IOException ex) {
             log.warn("OAuth 設定ファイルの読み込みに失敗しました: {}", ex.getMessage());
         }
+    }
+
+    private void loadSharedGasConfigFromFile() {
+        if (!Files.exists(SHARED_GAS_CONFIG_PATH)) {
+            return;
+        }
+        Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(SHARED_GAS_CONFIG_PATH)) {
+            props.load(in);
+            String url = props.getProperty("app.gas.shared-url", "").trim();
+            if (SecurityUtils.isValidGoogleAppsScriptUrl(url)) {
+                this.dynamicSharedGasUrl = url;
+                log.info("共有 GAS 設定ファイルを読み込みました: {}", SHARED_GAS_CONFIG_PATH);
+            }
+        } catch (IOException ex) {
+            log.warn("共有 GAS 設定ファイルの読み込みに失敗しました: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * 複数ユーザーで共有する GAS ウェブアプリ URL（「アクセスしているユーザーとして実行」設定）を保存する。
+     */
+    public synchronized void saveSharedGasUrl(String gasUrl) throws IOException {
+        String trimmed = gasUrl != null ? gasUrl.trim() : "";
+        if (!SecurityUtils.isValidGoogleAppsScriptUrl(trimmed)) {
+            throw new IllegalArgumentException(
+                    "Google Apps Script 公式のウェブアプリ URL（https://script.google.com/.../exec）を入力してください。");
+        }
+        if (SHARED_GAS_CONFIG_PATH.getParent() != null) {
+            Files.createDirectories(SHARED_GAS_CONFIG_PATH.getParent());
+        }
+        Properties props = new Properties();
+        props.setProperty("app.gas.shared-url", trimmed);
+        try (OutputStream out = Files.newOutputStream(SHARED_GAS_CONFIG_PATH)) {
+            props.store(out, "Shared Multi-User GAS Web App URL (ignored by git)");
+        }
+        try {
+            Set<PosixFilePermission> ownerOnly = EnumSet.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE);
+            Files.setPosixFilePermissions(SHARED_GAS_CONFIG_PATH, ownerOnly);
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Non-POSIX filesystems
+        }
+        this.dynamicSharedGasUrl = trimmed;
+    }
+
+    public String getSharedGasUrl() {
+        if (dynamicSharedGasUrl != null && !dynamicSharedGasUrl.isBlank()) {
+            return dynamicSharedGasUrl;
+        }
+        String envUrl = configuredSharedGasUrl != null ? configuredSharedGasUrl.trim() : "";
+        return SecurityUtils.isValidGoogleAppsScriptUrl(envUrl) ? envUrl : "";
+    }
+
+    public boolean isSharedGasConfigured() {
+        return !getSharedGasUrl().isBlank();
     }
 
     /**

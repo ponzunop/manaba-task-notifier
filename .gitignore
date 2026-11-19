@@ -6,6 +6,7 @@ target/
 ### Local Data & IDE ###
 data/
 config/google-oauth.properties
+config/shared-gas.properties
 *.mv.db
 *.trace.db
 .idea/
