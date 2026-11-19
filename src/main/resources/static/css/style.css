@@ -466,6 +466,10 @@ a:hover {
     align-items: start;
 }
 
+.login-main > * {
+    min-width: 0;
+}
+
 .divider {
     display: flex;
     align-items: center;

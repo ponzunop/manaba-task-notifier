@@ -722,11 +722,13 @@ public class AuthController {
 
     private String buildGasBrowserRedirectUrl(String gasUrl, String email) {
         String origin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
-        String callback = origin + "/auth/gas-callback";
+        String returnUrl = origin + "/auth/gas-callback";
 
+        // Google Apps Script (ESF) reserves the "callback" query param for JSONP and returns HTTP 400 for URL values.
+        // Use "returnUrl" instead (older deployed GAS scripts also fall back to http://localhost:8080/auth/gas-callback).
         String separator = gasUrl.contains("?") ? "&" : "?";
         StringBuilder sb = new StringBuilder(gasUrl);
-        sb.append(separator).append("callback=").append(urlEncode(callback));
+        sb.append(separator).append("returnUrl=").append(urlEncode(returnUrl));
         sb.append("&gasUrl=").append(urlEncode(gasUrl));
         if (email != null && !email.isBlank()) {
             sb.append("&email=").append(urlEncode(email));

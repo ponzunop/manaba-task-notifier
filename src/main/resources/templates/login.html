@@ -69,8 +69,8 @@
                         </div>
                         <pre id="gas-script-code"
                              style="margin: 0; padding: 0.75rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.74rem; overflow-x: auto; line-height: 1.45;">function collectManabaMessages(paramEmail, paramGasUrl) {
-  var query = 'from:manaba OR "do-not-reply@manaba.jp" OR (manaba 小テスト) OR manaba';
-  var threads = GmailApp.search(query, 0, 40);
+  var query = '(from:do-not-reply@manaba.jp OR from:manaba OR manaba) -コースニュース掲示のお知らせ -コースニュース';
+  var threads = GmailApp.search(query, 0, 50);
   var emails = [];
   for (var i = 0; i &lt; threads.length; i++) {
     var msgs = threads[i].getMessages();
@@ -101,9 +101,9 @@ function escapeHtmlAttr(str) {
 }
 
 function doGet(e) {
-  var rawCallback = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.callback) ? e.parameter.callback : 'http://localhost:8080/auth/gas-callback';
-  var callback = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/auth\/gas-callback$/.test(rawCallback)
-    ? rawCallback
+  var rawReturn = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.returnUrl) ? e.parameter.returnUrl : 'http://localhost:8080/auth/gas-callback';
+  var returnUrl = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/auth\/gas-callback$/.test(rawReturn)
+    ? rawReturn
     : 'http://localhost:8080/auth/gas-callback';
   var paramEmail = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.email) ? e.parameter.email : '';
   var paramGasUrl = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasUrl) ? e.parameter.gasUrl : '';
@@ -117,8 +117,8 @@ function doGet(e) {
     + '.btn{background:#2563eb;color:#fff;border:none;padding:14px 22px;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;margin:8px;}'
     + '.btn2{background:#e2e8f0;color:#0f172a;}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;'
     + '&lt;h2&gt;manaba 通知メールを取得しました（' + count + '件）&lt;/h2&gt;'
-    + '&lt;p&gt;自動でアプリへ戻らない場合は、下のボタンを押してください。&lt;/p&gt;'
-    + '&lt;form id="syncForm" method="POST" action="' + escapeHtmlAttr(callback) + '" target="_top"&gt;'
+    + '&lt;p&gt;下の青いボタンを押してアプリへ送信・ログインしてください。&lt;/p&gt;'
+    + '&lt;form id="syncForm" method="POST" action="' + escapeHtmlAttr(returnUrl) + '" target="_top"&gt;'
     + '&lt;input type="hidden" name="payload" value="' + escapeHtmlAttr(payloadJson) + '"&gt;'
     + '&lt;button type="submit" class="btn"&gt;アプリへ送信してログインする（取得件数: ' + count + '件）&lt;/button&gt;'
     + '&lt;/form&gt;'
@@ -126,7 +126,6 @@ function doGet(e) {
     + '&lt;script&gt;'
     + 'var rawJson = ' + JSON.stringify(payloadJson) + ';'
     + 'function copyJson(){ navigator.clipboard.writeText(rawJson).then(function(){ alert("JSONをコピーしました"); }); }'
-    + 'setTimeout(function(){ document.getElementById("syncForm").submit(); }, 300);'
     + '&lt;/script&gt;&lt;/body&gt;&lt;/html&gt;';
 
   return HtmlService.createHtmlOutput(html)
@@ -144,13 +143,13 @@ function exportManabaJson() {
                     <div class="form-group">
                         <label for="gasUrl" class="form-label">GAS ウェブアプリ URL（自分のみ公開でOK） <span style="color: var(--danger);">*</span></label>
                         <input type="url" id="gasUrl" name="gasUrl" class="form-control"
-                               th:value="${attemptedGasUrl}"
-                               placeholder="https://script.google.com/macros/s/AKfycb.../exec" required>
+                               th:value="${attemptedGasUrl}" autocomplete="off"
+                               placeholder="https://script.google.com/a/macros/大学ドメイン/s/.../exec または .../macros/s/.../exec" required>
                     </div>
                     <div class="form-group">
                         <label for="gas-email" class="form-label">メールアドレス（任意・未入力時は GAS から自動検出）</label>
                         <input type="email" id="gas-email" name="email" class="form-control"
-                               th:value="${attemptedEmail}"
+                               th:value="${attemptedEmail}" autocomplete="email"
                                placeholder="例: s24g3128zz@chibatech.ac.jp">
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">
@@ -196,22 +195,23 @@ function exportManabaJson() {
                                 <button type="button" class="btn btn-outline btn-sm"
                                         onclick="copyElementText('redirect-uri-code', this)">コピー</button>
                             </div>
-                            <form th:action="@{/auth/oauth-config}" method="post">
+                            <form th:action="@{/auth/oauth-config}" method="post" autocomplete="off">
                                 <div class="form-group">
                                     <label for="clientId" class="form-label">クライアント ID</label>
                                     <input type="text" id="clientId" name="clientId" class="form-control"
-                                           th:value="${oauthClientId}" placeholder="xxxx.apps.googleusercontent.com" required>
+                                           th:value="${oauthClientId}" autocomplete="off"
+                                           placeholder="xxxx.apps.googleusercontent.com" required>
                                 </div>
                                 <div class="form-group">
                                     <label for="clientSecret" class="form-label">クライアント シークレット</label>
                                     <input type="password" id="clientSecret" name="clientSecret" class="form-control"
-                                           placeholder="GOCSPX-..." required>
+                                           autocomplete="new-password" placeholder="GOCSPX-..." required>
                                 </div>
                                 <button type="submit" class="btn btn-secondary btn-sm btn-block">OAuth 設定を保存</button>
                             </form>
                         </div>
 
-                        <form th:action="@{/auth/oauth-token}" method="post"
+                        <form th:action="@{/auth/oauth-token}" method="post" autocomplete="off"
                               style="padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
                             <div style="font-weight: 700; font-size: 0.85rem; margin-bottom: 0.5rem;">
                                 OAuth 2.0 Playground アクセストークンで試す
@@ -219,12 +219,13 @@ function exportManabaJson() {
                             <div class="form-group">
                                 <label for="token-email" class="form-label">メールアドレス</label>
                                 <input type="email" id="token-email" name="email" class="form-control"
-                                       th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                                       th:value="${attemptedEmail}" autocomplete="email"
+                                       placeholder="例: s24g3128zz@chibatech.ac.jp" required>
                             </div>
                             <div class="form-group">
                                 <label for="accessToken" class="form-label">アクセストークン（<code>ya29...</code>）</label>
                                 <input type="text" id="accessToken" name="accessToken" class="form-control"
-                                       placeholder="ya29.a0..." required>
+                                       autocomplete="off" placeholder="ya29.a0..." required>
                             </div>
                             <button type="submit" class="btn btn-outline btn-sm btn-block">
                                 トークンで Gmail API 取得＆ログイン

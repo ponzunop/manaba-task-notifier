@@ -355,12 +355,19 @@ public class TaskFetchService {
 
         String normalizedBody = (body != null ? body : "").replace("\r\n", "\n").replace("\r", "\n");
         String cleanedSubject = subject != null ? subject.trim() : "";
+        String taskUrl = extractTaskUrl(normalizedBody);
+
+        // コースニュース（お知らせ掲示）や掲示板など、小テスト・課題ではないメールを明確に除外する
+        if (isNonAssignmentManabaNotice(cleanedSubject, normalizedBody, taskUrl)) {
+            return Optional.empty();
+        }
 
         String courseName = extractFirstGroup(COURSE_LINE_PATTERN, normalizedBody);
         String title = extractFirstGroup(TITLE_LINE_PATTERN, normalizedBody);
 
         LocalDateTime openTime = null;
         LocalDateTime deadline = null;
+        boolean hasExplicitDeadline = false;
 
         String rawOpen = extractFirstGroup(OPEN_TIME_LINE_PATTERN, normalizedBody);
         if (rawOpen != null) {
@@ -370,6 +377,9 @@ public class TaskFetchService {
         String rawDeadline = extractFirstGroup(DEADLINE_LINE_PATTERN, normalizedBody);
         if (rawDeadline != null) {
             deadline = parseDateTime(rawDeadline);
+            if (deadline != null) {
+                hasExplicitDeadline = true;
+            }
         }
 
         Matcher periodMatcher = PERIOD_LINE_PATTERN.matcher(normalizedBody);
@@ -379,7 +389,16 @@ public class TaskFetchService {
             }
             if (deadline == null) {
                 deadline = parseDateTime(periodMatcher.group(2));
+                if (deadline != null) {
+                    hasExplicitDeadline = true;
+                }
             }
+        }
+
+        // プロジェクトチーム通知（_teamtop_ 等）は明示的な締切ラベルがない限り課題として取り込まない
+        if (!hasExplicitDeadline && taskUrl != null
+                && (taskUrl.contains("_teamtop_") || taskUrl.contains("_thread_") || taskUrl.contains("_bbs_"))) {
+            return Optional.empty();
         }
 
         // 1行にラベル・次行に値の形式へのフォールバック（例: "[コース名]\nソフトウェア工学"）
@@ -390,14 +409,10 @@ public class TaskFetchService {
             title = extractNextLineAfterLabel(normalizedBody, "小テスト名", "課題名", "アンケート名", "タイトル");
         }
 
-        // 本文から日時ラベルが見つからない場合：本文中の日時出現順からフォールバック抽出
-        boolean manabaHint = containsIgnoreCase(cleanedSubject, "manaba")
-                || cleanedSubject.contains("小テスト")
-                || containsIgnoreCase(normalizedBody, "manaba")
-                || normalizedBody.contains("小テスト")
-                || normalizedBody.contains("受付");
+        // 本文から日時ラベルが見つからない場合：小テスト・課題系メールに限定して本文中の日時出現順からフォールバック抽出
+        boolean assignmentHint = isAssignmentMailHint(cleanedSubject, normalizedBody, taskUrl);
 
-        if (openTime == null && deadline == null && manabaHint) {
+        if (openTime == null && deadline == null && assignmentHint) {
             List<LocalDateTime> foundDates = extractAllDateTimes(normalizedBody);
             if (foundDates.size() >= 2) {
                 openTime = foundDates.get(0);
@@ -405,7 +420,7 @@ public class TaskFetchService {
             } else if (foundDates.size() == 1) {
                 deadline = foundDates.get(0);
             }
-        } else if (deadline == null && openTime != null) {
+        } else if (deadline == null && openTime != null && assignmentHint) {
             List<LocalDateTime> foundDates = extractAllDateTimes(normalizedBody);
             for (LocalDateTime candidate : foundDates) {
                 if (!candidate.equals(openTime)) {
@@ -425,13 +440,13 @@ public class TaskFetchService {
             }
         }
 
-        if (manabaHint && (deadline != null || openTime != null)) {
+        if (assignmentHint && (deadline != null || openTime != null)) {
             if (courseName == null && title != null) {
                 String fallbackCourse = stripManabaTag(cleanedSubject);
                 courseName = !fallbackCourse.isBlank() ? fallbackCourse : "manaba科目";
             } else if (title == null && courseName != null) {
                 String fallbackTitle = stripManabaTag(cleanedSubject);
-                title = !fallbackTitle.isBlank() ? fallbackTitle : detectTaskType(cleanedSubject, normalizedBody);
+                title = !fallbackTitle.isBlank() ? fallbackTitle : detectTaskType(cleanedSubject, normalizedBody, taskUrl);
             } else if (courseName == null && title == null) {
                 String cleaned = stripManabaTag(cleanedSubject);
                 if (!cleaned.isBlank()) {
@@ -449,11 +464,16 @@ public class TaskFetchService {
             return Optional.empty();
         }
         if (deadline == null) {
+            // 明示的な締切も2つ目の日時もない場合は課題として誤登録しない（_query_ / _report_ / _survey_ のみ許可）
+            boolean isExplicitTaskUrl = taskUrl != null
+                    && (taskUrl.contains("_query_") || taskUrl.contains("_report_") || taskUrl.contains("_survey_"));
+            if (!isExplicitTaskUrl) {
+                return Optional.empty();
+            }
             deadline = openTime;
         }
 
-        String taskType = detectTaskType(cleanedSubject, normalizedBody);
-        String taskUrl = extractTaskUrl(normalizedBody);
+        String taskType = detectTaskType(cleanedSubject, normalizedBody, taskUrl);
 
         return Optional.of(new ParsedTask(
                 courseName.trim(),
@@ -463,6 +483,35 @@ public class TaskFetchService {
                 taskType,
                 taskUrl
         ));
+    }
+
+    private boolean isNonAssignmentManabaNotice(String subject, String body, String taskUrl) {
+        if (taskUrl != null && taskUrl.contains("_news_")) {
+            return true;
+        }
+        if (subject.contains("コースニュース")
+                || body.contains("--コースニュース情報--")
+                || body.contains("コースニュースが掲示されました")) {
+            return true;
+        }
+        if (subject.contains("成績公開") || subject.contains("スレッド") || subject.contains("掲示板")) {
+            return !body.contains("受付終了") && !body.contains("締切");
+        }
+        return false;
+    }
+
+    private boolean isAssignmentMailHint(String subject, String body, String taskUrl) {
+        if (taskUrl != null && (taskUrl.contains("_query_") || taskUrl.contains("_report_") || taskUrl.contains("_survey_"))) {
+            return true;
+        }
+        String combined = subject + "\n" + body;
+        return combined.contains("小テスト")
+                || combined.contains("アンケート")
+                || combined.contains("レポート")
+                || combined.contains("課題公開")
+                || combined.contains("受付終了")
+                || combined.contains("締切")
+                || combined.contains("提出期限");
     }
 
     /**
@@ -506,10 +555,15 @@ public class TaskFetchService {
             int synced = 0;
             List<String> skippedSamples = new ArrayList<>();
 
+            if (userId != null && !userId.isBlank()) {
+                purgeNonAssignmentFalsePositives(userId);
+            }
+
             for (JsonNode item : emailsNode) {
                 String subject = item.path("subject").asText("");
                 String from = item.path("from").asText("");
                 String body = item.path("body").asText("");
+                String extractedUrl = extractTaskUrl(body);
 
                 Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, body);
                 if (parsedOpt.isPresent()) {
@@ -517,7 +571,9 @@ public class TaskFetchService {
                         upsertParsedTask(userId, parsedOpt.get());
                     }
                     synced++;
-                } else if (skippedSamples.size() < MAX_SKIPPED_SAMPLES && isManabaRelated(subject, from, body)) {
+                } else if (skippedSamples.size() < MAX_SKIPPED_SAMPLES
+                        && isManabaRelated(subject, from, body)
+                        && !isNonAssignmentManabaNotice(subject, body, extractedUrl)) {
                     skippedSamples.add(formatSkippedSample(subject, from, body));
                 }
             }
@@ -526,6 +582,28 @@ public class TaskFetchService {
         } catch (IOException ex) {
             log.warn("GAS JSON ペイロードの解析に失敗しました: {}", ex.getMessage());
             throw new GmailFetchException("GAS から受信した JSON の形式が正しくありません: " + ex.getMessage(), false, ex);
+        }
+    }
+
+    private void purgeNonAssignmentFalsePositives(String userId) {
+        List<Task> existing = taskRepository.findByUserIdOrderByDeadlineAsc(userId);
+        List<String> removedCourses = new ArrayList<>();
+        for (Task task : existing) {
+            String url = task.getTaskUrl();
+            if (url != null && (url.contains("_news_") || url.contains("_teamtop_") || url.contains("_thread_") || url.contains("_bbs_"))) {
+                removedCourses.add(task.getCourseName());
+                taskRepository.delete(task);
+            }
+        }
+        if (!removedCourses.isEmpty()) {
+            List<Task> remaining = taskRepository.findByUserIdOrderByDeadlineAsc(userId);
+            for (String course : removedCourses) {
+                boolean stillUsed = remaining.stream().anyMatch(t -> course != null && course.equals(t.getCourseName()));
+                if (!stillUsed && course != null) {
+                    notificationSettingRepository.findByUserIdAndCourseName(userId, course)
+                            .ifPresent(notificationSettingRepository::delete);
+                }
+            }
         }
     }
 
@@ -1143,7 +1221,18 @@ public class TaskFetchService {
         return fallback;
     }
 
-    private String detectTaskType(String subject, String body) {
+    private String detectTaskType(String subject, String body, String taskUrl) {
+        if (taskUrl != null) {
+            if (taskUrl.contains("_query_")) {
+                return "小テスト";
+            }
+            if (taskUrl.contains("_survey_")) {
+                return "アンケート";
+            }
+            if (taskUrl.contains("_report_")) {
+                return "レポート";
+            }
+        }
         String combined = ((subject != null ? subject : "") + "\n" + (body != null ? body : ""));
         if (combined.contains("小テスト")) {
             return "小テスト";
@@ -1151,7 +1240,7 @@ public class TaskFetchService {
         if (combined.contains("アンケート")) {
             return "アンケート";
         }
-        if (combined.contains("レポート") || combined.contains("課題名")) {
+        if (combined.contains("レポート")) {
             return "レポート";
         }
         return "小テスト";
