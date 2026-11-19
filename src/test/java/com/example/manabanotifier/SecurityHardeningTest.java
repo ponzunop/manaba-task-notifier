@@ -236,7 +236,18 @@ class SecurityHardeningTest {
         MockHttpSession startSession = (MockHttpSession) loginPage.getRequest().getSession(false);
         String csrf = (String) startSession.getAttribute(SecurityFilter.SESSION_CSRF_TOKEN);
 
-        // 2. 1クリックボタン（POST /auth/gas-shared-start）が共有 GAS URL + returnUrl + gasState へ遷移すること
+        // 2. 1クリックボタン（GET / POST /auth/gas-shared-start）が共有 GAS URL + returnUrl + gasState へ遷移すること
+        MvcResult getRedirectRes = mockMvc.perform(get("/auth/gas-shared-start")
+                        .session(startSession)
+                        .header("X-Forwarded-Proto", "https")
+                        .header("X-Forwarded-Host", "manaba-notifier-production.up.railway.app"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String getLocation = getRedirectRes.getResponse().getRedirectedUrl();
+        assertThat(getLocation).startsWith("https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec");
+        assertThat(getLocation).contains("returnUrl=https%3A%2F%2Fmanaba-notifier-production.up.railway.app%2Fauth%2Fgas-callback");
+        assertThat(getLocation).contains("gasState=");
+
         MvcResult redirectRes = mockMvc.perform(post("/auth/gas-shared-start")
                         .session(startSession)
                         .param("_csrf", csrf))

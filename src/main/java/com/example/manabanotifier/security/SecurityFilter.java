@@ -22,7 +22,7 @@ import java.util.Set;
  * - GAS ブラウザ連携コールバック（POST /auth/gas-callback）のみ Google Apps Script 由来 Origin/Referer を厳格検証
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class SecurityFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(SecurityFilter.class);
@@ -39,7 +39,7 @@ public class SecurityFilter extends OncePerRequestFilter {
                     + "script-src 'self' 'unsafe-inline'; "
                     + "img-src 'self' data:; "
                     + "connect-src 'self'; "
-                    + "form-action 'self' https://script.google.com https://accounts.google.com https://*.googleusercontent.com; "
+                    + "form-action 'self' https://script.google.com https://accounts.google.com https://*.google.com https://*.googleusercontent.com https://*.chibatech.ac.jp https://*.it-chiba.ac.jp https://*.chibakoudai.jp; "
                     + "frame-ancestors 'none'; "
                     + "base-uri 'self'";
 

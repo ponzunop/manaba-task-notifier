@@ -76,6 +76,12 @@ public class AuthController {
     @Value("${app.public-mode:false}")
     private boolean publicMode;
 
+    @Value("${app.base-url:}")
+    private String configuredBaseUrl;
+
+    @Value("${RAILWAY_PUBLIC_DOMAIN:}")
+    private String railwayPublicDomain;
+
     public AuthController(
             UserRepository userRepository,
             TaskFetchService taskFetchService,
@@ -153,7 +159,15 @@ public class AuthController {
     /**
      * マルチユーザー共有モード：管理者が登録済みの共有 GAS ウェブアプリ（「アクセスしているユーザーとして実行」）を使って
      * 他の学生が設定不要・1クリックで自分の Gmail から小テストを取得＆ログインする。
+     * GET / POST 両対応（GET リンク経由にすることで Chrome の CSP form-action による Google/大学SSO リダイレクト遮断を回避）。
      */
+    @GetMapping("/auth/gas-shared-start")
+    public String startSharedGasBrowserFlowGet(
+            HttpSession session,
+            Model model) {
+        return startSharedGasBrowserFlow(session, model);
+    }
+
     @PostMapping("/auth/gas-shared-start")
     public String startSharedGasBrowserFlow(
             HttpSession session,
@@ -890,8 +904,9 @@ public class AuthController {
     }
 
     private String buildGasBrowserRedirectUrl(String gasUrl, String email, String gasState) {
-        String origin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        String origin = resolvePublicOrigin();
         String returnUrl = origin + "/auth/gas-callback";
+        log.info("GAS ブラウザ連携リダイレクト開始: returnUrl={}", returnUrl);
 
         // Google Apps Script (ESF) reserves the "callback" query param for JSONP and returns HTTP 400 for URL values.
         // Use "returnUrl" + one-time "gasState" instead.
@@ -908,6 +923,31 @@ public class AuthController {
         return sb.toString();
     }
 
+    private String resolvePublicOrigin() {
+        if (configuredBaseUrl != null && !configuredBaseUrl.isBlank()) {
+            String trimmed = configuredBaseUrl.trim();
+            while (trimmed.endsWith("/")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 1);
+            }
+            if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+                return trimmed;
+            }
+        }
+        if (railwayPublicDomain != null && !railwayPublicDomain.isBlank()) {
+            String host = railwayPublicDomain.trim()
+                    .replaceFirst("^https?://", "")
+                    .replaceAll("/+$", "");
+            if (!host.isBlank()) {
+                return "https://" + host;
+            }
+        }
+        try {
+            return ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        } catch (Exception ex) {
+            return "http://localhost:8080";
+        }
+    }
+
     private void saveSyncDiagnostics(HttpSession session, ImportResult result) {
         session.setAttribute(SESSION_SYNC_SCANNED, result.getScannedEmailCount());
         session.setAttribute(SESSION_SYNC_SYNCED, result.getSyncedCount());
@@ -915,12 +955,7 @@ public class AuthController {
     }
 
     private void populateLoginModel(Model model) {
-        String currentOrigin;
-        try {
-            currentOrigin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
-        } catch (Exception ex) {
-            currentOrigin = "http://localhost:8080";
-        }
+        String currentOrigin = resolvePublicOrigin();
         model.addAttribute("appOrigin", currentOrigin);
         model.addAttribute("sharedGasConfigured", taskFetchService.isSharedGasConfigured());
         model.addAttribute("sharedGasUrl", taskFetchService.getSharedGasUrl());
