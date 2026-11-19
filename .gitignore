@@ -5,6 +5,7 @@ target/
 
 ### Local Data & IDE ###
 data/
+config/google-oauth.properties
 *.mv.db
 *.trace.db
 .idea/

@@ -34,7 +34,9 @@ public class User {
     private String pushKeys;
 
     @Column(columnDefinition = "TEXT")
-    private String imapPassword;
+    private String gasUrl;
+
+    private String gasToken;
 
     private String authType;
 
@@ -97,12 +99,20 @@ public class User {
         this.pushKeys = pushKeys;
     }
 
-    public String getImapPassword() {
-        return imapPassword;
+    public String getGasUrl() {
+        return gasUrl;
     }
 
-    public void setImapPassword(String imapPassword) {
-        this.imapPassword = imapPassword;
+    public void setGasUrl(String gasUrl) {
+        this.gasUrl = gasUrl;
+    }
+
+    public String getGasToken() {
+        return gasToken;
+    }
+
+    public void setGasToken(String gasToken) {
+        this.gasToken = gasToken;
     }
 
     public String getAuthType() {
