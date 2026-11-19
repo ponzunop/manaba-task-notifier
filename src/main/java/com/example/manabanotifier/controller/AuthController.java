@@ -3,6 +3,7 @@ package com.example.manabanotifier.controller;
 import com.example.manabanotifier.entity.User;
 import com.example.manabanotifier.repository.UserRepository;
 import com.example.manabanotifier.service.TaskFetchService;
+import com.example.manabanotifier.service.TaskFetchService.GasFetchResult;
 import com.example.manabanotifier.service.TaskFetchService.GmailFetchException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -12,7 +13,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -41,7 +41,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 連携・ログイン・Gmail同期・メール取り込み・Web Push購読コントローラ（担当：大友）。
+ * 連携・ログイン（Google OAuth 2.0 / GAS ウェブアプリ / メール本文・JSON取込）・Web Push購読コントローラ（担当：大友）。
  */
 @Controller
 public class AuthController {
@@ -53,25 +53,10 @@ public class AuthController {
     private static final String SESSION_OAUTH_STATE = "oauth_state";
     private static final String COOKIE_USER_ID = "user_id";
 
-    private static final String GMAIL_AUTH_GUIDE_MSG =
-            "Gmail（imap.gmail.com）への接続認証に失敗しました。"
-                    + "Googleの仕様上、通常のログインパスワードでは外部アプリからメールを取得できません。"
-                    + "Googleアカウントの『16桁のアプリパスワード』（https://myaccount.google.com/apppasswords）を入力するか、"
-                    + "OAuth 2.0 トークンで連携してください。";
-
     private final UserRepository userRepository;
     private final TaskFetchService taskFetchService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
-
-    @Value("${google.oauth.client-id:}")
-    private String oauthClientId;
-
-    @Value("${google.oauth.client-secret:}")
-    private String oauthClientSecret;
-
-    @Value("${google.oauth.redirect-uri:http://localhost:8080/auth/callback}")
-    private String oauthRedirectUri;
 
     public AuthController(
             UserRepository userRepository,
@@ -90,6 +75,7 @@ public class AuthController {
             @RequestParam(required = false) String error,
             @RequestParam(required = false) String logout,
             @RequestParam(name = "oauth_unconfigured", required = false) String oauthUnconfigured,
+            @RequestParam(name = "oauth_saved", required = false) String oauthSaved,
             HttpSession session,
             @CookieValue(value = COOKIE_USER_ID, required = false) String cookieUserId,
             HttpServletResponse response,
@@ -119,93 +105,51 @@ public class AuthController {
 
         if ("true".equals(oauthUnconfigured)) {
             model.addAttribute("infoMessage",
-                    "このサーバには Google Cloud の OAuth クライアントID/Secret が未設定です。"
-                            + "設定不要で今すぐ実際の Gmail から小テストを取得できる『方法①：メールアドレス + Google 16桁アプリパスワード』、"
-                            + "または『方法②：Gmail API アクセストークン直接入力』をご利用ください。");
+                    "Google OAuth 2.0 のクライアントID / シークレットがまだ設定されていません。"
+                            + "下の『初回のみ：Google OAuth 2.0 設定』に保存するか、"
+                            + "設定不要の『方法②：Google Apps Script (GAS) 連携』をご利用ください。");
+            model.addAttribute("openOAuthSetup", true);
+        }
+
+        if ("true".equals(oauthSaved)) {
+            model.addAttribute("successMessage",
+                    "Google OAuth 2.0 設定を保存しました。上の「Google アカウントでログイン & Gmail 連携」ボタンから認証できます。");
         }
 
         if ("true".equals(logout)) {
             model.addAttribute("logoutMessage", "ログアウトしました。");
         }
 
-        model.addAttribute("oauthConfigured", isOAuthConfigured());
+        populateLoginModel(model);
         return "login";
     }
 
     /**
-     * ログイン方法①：メールアドレス ＋ Google 16桁アプリパスワード（IMAPS 連携）。
-     * または Gmail 連携なしのローカル利用（メール本文貼り付け／手動追加モード）。
+     * 画面から Google OAuth 2.0 クライアントID / Secret を保存する（サーバ再起動不要）。
      */
-    @PostMapping("/auth/login")
-    public String loginWithImap(
-            @RequestParam String email,
-            @RequestParam(required = false) String password,
-            @RequestParam(required = false) String displayName,
-            @RequestParam(required = false, defaultValue = "false") boolean allowManualWithoutGmail,
-            HttpSession session,
-            HttpServletResponse response,
-            RedirectAttributes redirectAttributes,
+    @PostMapping("/auth/oauth-config")
+    public String saveOAuthConfig(
+            @RequestParam String clientId,
+            @RequestParam String clientSecret,
             Model model) {
 
-        model.addAttribute("oauthConfigured", isOAuthConfigured());
-
-        if (email == null || email.isBlank() || !email.contains("@")) {
-            model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
-            return "login";
-        }
-
-        String trimmedEmail = email.trim().toLowerCase();
-        String resolvedName = (displayName != null && !displayName.isBlank())
-                ? displayName.trim()
-                : trimmedEmail.substring(0, trimmedEmail.indexOf('@'));
-        String userId = generateUserId(trimmedEmail);
-
-        if (allowManualWithoutGmail) {
-            User user = upsertUser(userId, trimmedEmail, resolvedName, null, null, null, "MANUAL");
-            establishLoginSession(user, session, response);
-            redirectAttributes.addFlashAttribute("infoMessage",
-                    "Gmail連携なしでログインしました（" + trimmedEmail + "）。「manaba通知メール本文を貼り付けて追加」または手動追加をご利用ください。");
-            return "redirect:/tasks";
-        }
-
-        if (password == null || password.isBlank()) {
-            model.addAttribute("errorMessage", GMAIL_AUTH_GUIDE_MSG);
-            model.addAttribute("attemptedEmail", trimmedEmail);
-            model.addAttribute("attemptedDisplayName", displayName);
-            model.addAttribute("showManualContinue", true);
-            return "login";
-        }
-
-        String cleanPassword = password.replaceAll("\\s+", "");
         try {
-            int syncedCount = taskFetchService.fetchTasksFromGmailImap(userId, trimmedEmail, cleanPassword);
-            User user = upsertUser(userId, trimmedEmail, resolvedName, null, null, cleanPassword, "IMAP");
-            establishLoginSession(user, session, response);
-
-            if (syncedCount > 0) {
-                redirectAttributes.addFlashAttribute("successMessage",
-                        "Gmail（" + trimmedEmail + "）に接続し、" + syncedCount + " 件の manaba 小テスト・課題を自動取得しました。");
-            } else {
-                redirectAttributes.addFlashAttribute("infoMessage",
-                        "Gmail（" + trimmedEmail + "）への接続に成功しましたが、該当する manaba 通知メールが見つかりませんでした。メール本文貼り付けや手動追加も利用できます。");
-            }
-            return "redirect:/tasks?synced=true";
-        } catch (GmailFetchException ex) {
-            log.warn("IMAP ログイン失敗: email={}, authFailed={}, msg={}", trimmedEmail, ex.isAuthFailed(), ex.getMessage());
-            model.addAttribute("errorMessage", ex.isAuthFailed() ? GMAIL_AUTH_GUIDE_MSG : ex.getMessage());
-            model.addAttribute("attemptedEmail", trimmedEmail);
-            model.addAttribute("attemptedDisplayName", displayName);
-            model.addAttribute("showManualContinue", true);
+            taskFetchService.saveOAuthConfig(clientId, clientSecret);
+            return "redirect:/login?oauth_saved=true";
+        } catch (IllegalArgumentException | IOException ex) {
+            model.addAttribute("errorMessage", "OAuth 設定の保存に失敗しました: " + ex.getMessage());
+            model.addAttribute("openOAuthSetup", true);
+            populateLoginModel(model);
             return "login";
         }
     }
 
     /**
-     * ログイン方法②-A：本物の Google OAuth 2.0 認可開始エンドポイント。
+     * 方法①：本物の Google OAuth 2.0 認可開始エンドポイント。
      */
     @GetMapping("/auth/google")
     public String startGoogleOAuth(HttpSession session) {
-        if (!isOAuthConfigured()) {
+        if (!taskFetchService.isOAuthConfigured()) {
             return "redirect:/login?oauth_unconfigured=true";
         }
 
@@ -213,8 +157,8 @@ public class AuthController {
         session.setAttribute(SESSION_OAUTH_STATE, state);
 
         String authUrl = UriComponentsBuilder.fromUriString("https://accounts.google.com/o/oauth2/v2/auth")
-                .queryParam("client_id", oauthClientId.trim())
-                .queryParam("redirect_uri", oauthRedirectUri.trim())
+                .queryParam("client_id", taskFetchService.getOAuthClientId())
+                .queryParam("redirect_uri", taskFetchService.getOAuthRedirectUri())
                 .queryParam("response_type", "code")
                 .queryParam("scope", "https://www.googleapis.com/auth/gmail.readonly openid email profile")
                 .queryParam("access_type", "offline")
@@ -227,7 +171,7 @@ public class AuthController {
     }
 
     /**
-     * ログイン方法②-A：本物の Google OAuth 2.0 コールバック処理。
+     * 方法①：本物の Google OAuth 2.0 コールバック処理。
      */
     @GetMapping("/auth/callback")
     public String handleGoogleCallback(
@@ -238,7 +182,8 @@ public class AuthController {
             HttpServletResponse response,
             RedirectAttributes redirectAttributes) {
 
-        if ((error != null && !error.isBlank()) || code == null || code.isBlank() || !isOAuthConfigured()) {
+        if ((error != null && !error.isBlank()) || code == null || code.isBlank()
+                || !taskFetchService.isOAuthConfigured()) {
             log.warn("Google OAuth コールバック失敗: error={}, codePresent={}", error, code != null);
             return "redirect:/login?error=oauth_failed";
         }
@@ -252,9 +197,9 @@ public class AuthController {
 
         try {
             String formBody = "code=" + urlEncode(code)
-                    + "&client_id=" + urlEncode(oauthClientId.trim())
-                    + "&client_secret=" + urlEncode(oauthClientSecret.trim())
-                    + "&redirect_uri=" + urlEncode(oauthRedirectUri.trim())
+                    + "&client_id=" + urlEncode(taskFetchService.getOAuthClientId())
+                    + "&client_secret=" + urlEncode(taskFetchService.getOAuthClientSecret())
+                    + "&redirect_uri=" + urlEncode(taskFetchService.getOAuthRedirectUri())
                     + "&grant_type=authorization_code";
 
             HttpRequest tokenReq = HttpRequest.newBuilder(URI.create("https://oauth2.googleapis.com/token"))
@@ -300,11 +245,11 @@ public class AuthController {
 
             String userId = generateUserId(email);
             int syncedCount = taskFetchService.fetchTasksFromGmailApi(userId, accessToken);
-            User user = upsertUser(userId, email, name, accessToken, refreshToken, null, "OAUTH2");
+            User user = upsertUser(userId, email, name, accessToken, refreshToken, null, null, "OAUTH2");
             establishLoginSession(user, session, response);
 
             redirectAttributes.addFlashAttribute("successMessage",
-                    "Google OAuth 2.0 で連携し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
+                    "Google OAuth 2.0（" + email + "）で連携し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
             return "redirect:/tasks?synced=true";
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -316,7 +261,7 @@ public class AuthController {
     }
 
     /**
-     * ログイン方法②-B：Gmail API アクセストークン（ya29...）を直接入力して本物の Gmail API から取得する。
+     * 方法①-B：OAuth 2.0 Playground 等で取得した Gmail API アクセストークン（ya29...）で即時連携する。
      */
     @PostMapping("/auth/oauth-token")
     public String loginWithOAuthToken(
@@ -328,15 +273,15 @@ public class AuthController {
             RedirectAttributes redirectAttributes,
             Model model) {
 
-        model.addAttribute("oauthConfigured", isOAuthConfigured());
-
         if (email == null || email.isBlank() || !email.contains("@")) {
             model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
+            populateLoginModel(model);
             return "login";
         }
         if (accessToken == null || accessToken.isBlank()) {
             model.addAttribute("errorMessage", "Gmail API アクセストークンを入力してください。");
             model.addAttribute("attemptedEmail", email.trim());
+            populateLoginModel(model);
             return "login";
         }
 
@@ -349,22 +294,112 @@ public class AuthController {
 
         try {
             int syncedCount = taskFetchService.fetchTasksFromGmailApi(userId, trimmedToken);
-            User user = upsertUser(userId, trimmedEmail, resolvedName, trimmedToken, null, null, "OAUTH2");
+            User user = upsertUser(userId, trimmedEmail, resolvedName, trimmedToken, null, null, null, "OAUTH2");
             establishLoginSession(user, session, response);
 
             redirectAttributes.addFlashAttribute("successMessage",
-                    "Gmail API に接続し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
+                    "Gmail API（" + trimmedEmail + "）に接続し、" + syncedCount + " 件の manaba 小テスト・課題を取得しました。");
             return "redirect:/tasks?synced=true";
         } catch (GmailFetchException ex) {
             model.addAttribute("errorMessage", ex.getMessage());
             model.addAttribute("attemptedEmail", trimmedEmail);
-            model.addAttribute("showManualContinue", true);
+            model.addAttribute("openOAuthSetup", true);
+            populateLoginModel(model);
             return "login";
         }
     }
 
     /**
-     * 貼り付けられた manaba 通知メール本文を解析して小テスト・課題を登録する。
+     * 方法②：Google Apps Script (GAS) ウェブアプリ連携ログイン。
+     */
+    @PostMapping("/auth/gas-login")
+    public String loginWithGas(
+            @RequestParam String gasUrl,
+            @RequestParam(required = false, defaultValue = "manaba-sync-2026") String gasToken,
+            @RequestParam(required = false) String email,
+            @RequestParam(required = false) String displayName,
+            HttpSession session,
+            HttpServletResponse response,
+            RedirectAttributes redirectAttributes,
+            Model model) {
+
+        String trimmedUrl = gasUrl != null ? gasUrl.trim() : "";
+        String trimmedToken = gasToken != null ? gasToken.trim() : "manaba-sync-2026";
+        String trimmedEmail = (email != null && !email.isBlank()) ? email.trim().toLowerCase() : null;
+
+        try {
+            GasFetchResult result = taskFetchService.fetchTasksFromGasForLogin(trimmedEmail, trimmedUrl, trimmedToken);
+            String resolvedEmail = result.getEmail();
+            String resolvedName = (displayName != null && !displayName.isBlank())
+                    ? displayName.trim()
+                    : resolvedEmail.substring(0, resolvedEmail.indexOf('@'));
+
+            User user = upsertUser(
+                    result.getUserId(),
+                    resolvedEmail,
+                    resolvedName,
+                    null,
+                    null,
+                    trimmedUrl,
+                    trimmedToken,
+                    "GAS"
+            );
+            establishLoginSession(user, session, response);
+
+            if (result.getSyncedCount() > 0) {
+                redirectAttributes.addFlashAttribute("successMessage",
+                        "GAS ウェブアプリ（" + resolvedEmail + "）から "
+                                + result.getSyncedCount() + " 件の小テスト・課題を取り込みました。");
+            } else {
+                redirectAttributes.addFlashAttribute("infoMessage",
+                        "GAS ウェブアプリ（" + resolvedEmail + "）に接続しました（メール "
+                                + result.getTotalMessages() + " 件中、取り込み対象の小テストは 0 件でした）。");
+            }
+            return "redirect:/tasks?synced=true";
+        } catch (GmailFetchException ex) {
+            model.addAttribute("errorMessage", ex.getMessage());
+            model.addAttribute("attemptedGasUrl", trimmedUrl);
+            model.addAttribute("attemptedGasToken", trimmedToken);
+            model.addAttribute("attemptedEmail", trimmedEmail);
+            populateLoginModel(model);
+            return "login";
+        }
+    }
+
+    /**
+     * メール連携なしでログイン（メールアドレスのみ入力・パスワード不要）。
+     */
+    @PostMapping("/auth/login")
+    public String loginWithoutGmail(
+            @RequestParam String email,
+            @RequestParam(required = false) String displayName,
+            HttpSession session,
+            HttpServletResponse response,
+            RedirectAttributes redirectAttributes,
+            Model model) {
+
+        if (email == null || email.isBlank() || !email.contains("@")) {
+            model.addAttribute("errorMessage", "有効なメールアドレスを入力してください。");
+            populateLoginModel(model);
+            return "login";
+        }
+
+        String trimmedEmail = email.trim().toLowerCase();
+        String resolvedName = (displayName != null && !displayName.isBlank())
+                ? displayName.trim()
+                : trimmedEmail.substring(0, trimmedEmail.indexOf('@'));
+        String userId = generateUserId(trimmedEmail);
+
+        User user = upsertUser(userId, trimmedEmail, resolvedName, null, null, null, null, "MANUAL");
+        establishLoginSession(user, session, response);
+
+        redirectAttributes.addFlashAttribute("infoMessage",
+                "ログインしました（" + trimmedEmail + "）。「manaba通知メール / GAS JSON を貼り付けて追加」または手動追加から小テストを登録できます。");
+        return "redirect:/tasks";
+    }
+
+    /**
+     * 貼り付けられた manaba 通知メール本文または GAS exportManabaJson() JSON を解析して登録する。
      */
     @PostMapping("/auth/import-email")
     public String importEmailText(
@@ -383,18 +418,18 @@ public class AuthController {
         String text = firstNonBlank(rawText, emailText, rawEmailText);
         if (text == null) {
             redirectAttributes.addFlashAttribute("errorMessage",
-                    "取り込む manaba 通知メールの本文を入力してください。");
+                    "取り込む manaba 通知メール本文または GAS JSON を入力してください。");
             return "redirect:/tasks";
         }
 
         int count = taskFetchService.importFromRawEmailText(userId, text);
         if (count == 0) {
             redirectAttributes.addFlashAttribute("errorMessage",
-                    "メール本文から manaba の小テスト・課題情報を抽出できませんでした。"
-                            + "「[コース名]」「[小テスト名] / [課題名]」「[受付終了日時]」が含まれているか確認してください。");
+                    "入力内容から manaba の小テスト・課題情報を抽出できませんでした。"
+                            + "「[コース名]」「[小テスト名] / [課題名]」「[受付終了日時]」または GAS JSON 形式か確認してください。");
         } else {
             redirectAttributes.addFlashAttribute("successMessage",
-                    "貼り付けたメール本文から " + count + " 件の小テスト・課題を取り込みました。");
+                    "貼り付けた内容から " + count + " 件の小テスト・課題を取り込みました。");
         }
         return "redirect:/tasks";
     }
@@ -452,7 +487,7 @@ public class AuthController {
     }
 
     /**
-     * 実際の Gmail から manaba 課題・小テスト通知メールの手動同期を実行する。
+     * 連携済み方式（Google OAuth 2.0 または GAS ウェブアプリ）から小テストメールの手動同期を実行する。
      */
     @PostMapping("/auth/fetch-tasks")
     public String fetchTasksManually(
@@ -493,9 +528,10 @@ public class AuthController {
         return "redirect:/login?logout=true";
     }
 
-    private boolean isOAuthConfigured() {
-        return oauthClientId != null && !oauthClientId.isBlank()
-                && oauthClientSecret != null && !oauthClientSecret.isBlank();
+    private void populateLoginModel(Model model) {
+        model.addAttribute("oauthConfigured", taskFetchService.isOAuthConfigured());
+        model.addAttribute("oauthRedirectUri", taskFetchService.getOAuthRedirectUri());
+        model.addAttribute("oauthClientId", taskFetchService.getOAuthClientId());
     }
 
     private String generateUserId(String email) {
@@ -509,7 +545,8 @@ public class AuthController {
             String displayName,
             String accessToken,
             String refreshToken,
-            String imapPassword,
+            String gasUrl,
+            String gasToken,
             String authType) {
 
         Optional<User> existingOpt = userRepository.findByEmail(email);
@@ -531,8 +568,11 @@ public class AuthController {
         if (refreshToken != null) {
             user.setRefreshToken(refreshToken);
         }
-        if (imapPassword != null) {
-            user.setImapPassword(imapPassword);
+        if (gasUrl != null) {
+            user.setGasUrl(gasUrl);
+        }
+        if (gasToken != null) {
+            user.setGasToken(gasToken);
         }
         if (authType != null) {
             user.setAuthType(authType);
