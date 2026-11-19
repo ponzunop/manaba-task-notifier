@@ -11,7 +11,7 @@
 | 種別 | ファイルパス | 役割 |
 | :--- | :--- | :--- |
 | Controller | `src/main/java/com/example/manabanotifier/controller/TaskController.java` | ログイン確認、小テスト・課題一覧の締切昇順取得、種別/公開時間/締切/URL対応、カウント集計、フィルタ検索、受験/提出状態更新、手動登録 |
-| View (Thymeleaf) | `src/main/resources/templates/tasks.html` | 共通ナビゲーションバー、Gmail同期・メール本文貼り付け・手動追加バー、サマリーカード、種別バッジ/公開時間/締切時間/リンク付き一覧テーブル、各モーダル |
+| View (Thymeleaf) | `src/main/resources/templates/tasks.html` | 共通ナビゲーションバー、Gmail同期・メール本文/GAS JSON貼り付け・手動追加バー、サマリーカード、種別バッジ/公開時間/締切時間/リンク付き一覧テーブル、各モーダル |
 | 解説資料 | `docs/B_ashikawa_tasks.md` | 本ドキュメント（設計意図・連携仕様・発表説明ポイント） |
 
 ---
@@ -20,7 +20,7 @@
 
 ```
 [機能A: 大友] AuthController / TaskFetchService
-   │ Gmail (IMAPS / Gmail API) またはメール本文貼り付けから manaba 小テスト通知を解析
+   │ Google OAuth 2.0 (Gmail API) / GAS 連携、またはメール本文・GAS JSON 貼り付けから manaba 小テスト通知を解析
    │ 科目名・小テスト名・公開時間 (openTime)・締切時間 (deadline)・URL (taskUrl)・種別 (taskType) を保存
    │ セッション "user_id" および Cookie "user_id" を発行して /tasks へ遷移
    ▼
@@ -74,8 +74,8 @@
 - **状態・操作**: 緊急度バッジ（`期限超過` / `締切間近` / `公開前` / `3日以内` / `受付中` / `受験済`）と「受験済みにする / 提出済みにする」ボタン（完了後は「未受験に戻す / 未提出に戻す」）
 
 ### (2) 上部アクションバーと2種類のモーダル
-- **「Gmailから最新の小テスト通知メールを取得」**: `POST /auth/fetch-tasks` を実行し、実際の Gmail から manaba 通知を再取得
-- **「manaba通知メール本文を貼り付けて追加」モーダル**: `POST /auth/import-email`（`rawText`）へメール本文を送信し、自動解析して登録
+- **「Gmailから最新の小テストを取得」**: `POST /auth/fetch-tasks` を実行し、Google OAuth 2.0（Gmail API）または GAS 連携により最新の manaba 通知を再取得
+- **「manaba通知メール本文 / GAS JSON を貼り付けて追加」モーダル**: `POST /auth/import-email`（`rawText`）へ manaba 通知メール本文、または GAS `exportManabaJson()` 出力 JSON を送信し、自動解析して一括登録
 - **「＋ 小テストを手動追加」モーダル**: `POST /tasks/create` へ種別・科目名・小テスト名・公開時間・締切時間・URL を送信して登録
 
 ### (3) 共通ナビゲーションバー
@@ -88,4 +88,4 @@
 
 1. **実データ準拠の小テスト一覧**: 実際の Gmail から取得した manaba 小テストの「科目名」「公開時間」「締切時間」「manaba URL」を締切が近い順に一覧表示します。
 2. **ワンクリックで通知停止**: 「受験済みにする / 提出済みにする」ボタンを押すと DB の `is_submitted` が `true` に更新され、川邉さん担当の通知スケジューラが自動で通知対象から除外します。
-3. **柔軟な取り込みと安全性**: Gmail 自動取得に加えて「通知メール本文貼り付け」と「公開時間・締切時間指定の手動追加」を備え、セッション検証と所有者チェックで他人のデータ操作を防いでいます。
+3. **柔軟な取り込みと安全性**: Google OAuth 2.0 / GAS 連携による Gmail 自動取得に加えて、「通知メール本文 / GAS JSON 貼り付け」と「公開時間・締切時間指定の手動追加」を備え、セッション検証と所有者チェックで他人のデータ操作を防いでいます。

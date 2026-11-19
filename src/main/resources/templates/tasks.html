@@ -835,7 +835,7 @@
         </div>
         <div class="nav-actions">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
-                <button type="submit" class="btn-nav btn-nav-sync" title="Gmailから最新の小テスト通知メールを取得">Gmail同期</button>
+                <button type="submit" class="btn-nav btn-nav-sync" title="OAuth 2.0 / GAS連携でGmailから最新の小テストを取得">Gmail同期</button>
             </form>
             <button type="button" id="push-permission-btn" class="btn-nav btn-nav-push">通知許可を確認中</button>
             <span class="user-chip" th:text="${userDisplayName}">user</span>
@@ -858,9 +858,9 @@
     <section class="quick-actions-bar" aria-label="小テスト情報の取得と追加">
         <div class="quick-actions-left">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
-                <button type="submit" class="btn-accent">Gmailから最新の小テスト通知メールを取得</button>
+                <button type="submit" class="btn-accent" title="Google OAuth 2.0 / GAS連携によりGmailから取得">Gmailから最新の小テストを取得</button>
             </form>
-            <button type="button" id="open-import-modal-btn" class="btn-outline">manaba通知メール本文を貼り付けて追加</button>
+            <button type="button" id="open-import-modal-btn" class="btn-outline">manaba通知メール本文 / GAS JSON を貼り付けて追加</button>
             <button type="button" id="open-create-modal-btn" class="btn-primary">＋ 小テストを手動追加</button>
         </div>
         <span class="page-subtitle" th:if="${userEmail != ''}" th:text="'連携アカウント: ' + ${userEmail}">連携アカウント</span>
@@ -949,7 +949,7 @@
         <div th:if="${#lists.isEmpty(tasks)}" class="empty-state">
             <h3>表示できる小テスト・課題がありません</h3>
             <p>
-                上の「Gmailから最新の小テスト通知メールを取得」、または「manaba通知メール本文を貼り付けて追加」「＋ 小テストを手動追加」から登録してください。
+                上の「Gmailから最新の小テストを取得」（OAuth 2.0 / GAS連携）、または「manaba通知メール本文 / GAS JSON を貼り付けて追加」「＋ 小テストを手動追加」から登録してください。
             </p>
         </div>
 
@@ -1030,27 +1030,27 @@
     </section>
 </main>
 
-<!-- manaba通知メール本文貼り付けモーダル -->
+<!-- manaba通知メール本文 / GAS JSON 貼り付けモーダル -->
 <div id="import-email-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
     <div class="modal-dialog">
         <div class="modal-header">
-            <h2 id="import-modal-title">manaba通知メール本文を貼り付けて追加</h2>
+            <h2 id="import-modal-title">manaba通知メール本文 / GAS JSON を貼り付けて追加</h2>
             <button type="button" id="close-import-modal-btn" class="modal-close" aria-label="閉じる">&times;</button>
         </div>
         <p class="modal-help">
-            manaba から届いた小テストリマインダメールの本文をそのまま貼り付けると、科目名・小テスト名・公開時間（受付開始日時）・締切時間（受付終了日時）・URLを自動解析して登録します。
+            <strong>manaba 通知メール本文</strong>のそのままの貼り付け、または <strong>Google Apps Script (GAS) の <code>exportManabaJson()</code> 出力 JSON</strong> の貼り付けの両方に対応しています。科目名・小テスト名・公開時間（受付開始日時）・締切時間（受付終了日時）・URLを自動解析して一括登録します。
         </p>
         <form th:action="@{/auth/import-email}" method="post">
             <div class="form-group">
-                <label for="import-raw-text">メール本文（複数件まとめても可）</label>
+                <label for="import-raw-text">メール本文 または GAS 出力 JSON（複数件まとめても可）</label>
                 <textarea id="import-raw-text"
                           name="rawText"
                           required
-                          placeholder="例：&#10;[コース名] : ソフトウェア工学&#10;[小テスト名] : 第8回確認小テスト&#10;[受付開始日時] : 2026-11-18 10:00&#10;[受付終了日時] : 2026-11-25 23:59&#10;PC : https://manaba..."></textarea>
+                          placeholder="【例1：manaba通知メール本文】&#10;[コース名] : ソフトウェア工学&#10;[小テスト名] : 第8回確認小テスト&#10;[受付開始日時] : 2026-11-18 10:00&#10;[受付終了日時] : 2026-11-25 23:59&#10;PC : https://cit.manaba.jp/...&#10;&#10;【例2：GAS exportManabaJson() 出力 JSON】&#10;{&quot;email&quot;:&quot;...@chibatech.ac.jp&quot;,&quot;emails&quot;:[{&quot;subject&quot;:&quot;...&quot;,&quot;body&quot;:&quot;...&quot;}]}"></textarea>
             </div>
             <div class="modal-footer">
                 <button type="button" id="cancel-import-modal-btn" class="btn-secondary">キャンセル</button>
-                <button type="submit" class="btn-accent">メールを解析して登録</button>
+                <button type="submit" class="btn-accent">解析して登録</button>
             </div>
         </form>
     </div>
