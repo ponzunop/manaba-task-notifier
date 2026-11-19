@@ -8,31 +8,25 @@ import com.example.manabanotifier.repository.TaskRepository;
 import com.example.manabanotifier.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.mail.AuthenticationFailedException;
-import jakarta.mail.Folder;
-import jakarta.mail.Message;
-import jakarta.mail.MessagingException;
-import jakarta.mail.Multipart;
-import jakarta.mail.Part;
-import jakarta.mail.Session;
-import jakarta.mail.Store;
-import jakarta.mail.search.BodyTerm;
-import jakarta.mail.search.FromStringTerm;
-import jakarta.mail.search.OrTerm;
-import jakarta.mail.search.SearchTerm;
-import jakarta.mail.search.SubjectTerm;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -42,12 +36,13 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 実際の Gmail (IMAPS / Gmail REST API) および manaba 通知メール本文から
- * 小テスト・課題情報を取得・解析するサービス（担当：大友）。
+ * Google OAuth 2.0 (Gmail REST API) および Google Apps Script (GAS) ウェブアプリ連携、
+ * manaba 通知メール本文・JSON 取り込みを行うサービス（担当：大友）。
  */
 @Service
 public class TaskFetchService {
@@ -55,7 +50,9 @@ public class TaskFetchService {
     private static final Logger log = LoggerFactory.getLogger(TaskFetchService.class);
 
     private static final String DEFAULT_NOTIFY_TIMINGS = "24,5,1";
-    private static final int MAX_IMAP_MESSAGES_TO_PARSE = 60;
+    private static final Path OAUTH_CONFIG_PATH = Paths.get("config", "google-oauth.properties");
+    private static final String GMAIL_SEARCH_QUERY =
+            "from:do-not-reply@manaba.jp OR manaba OR (小テスト (受付終了 OR 締切 OR コース))";
 
     // コース名・科目名パターン（[コース名] : ..., ■コース名：..., コース名: ... 等に対応）
     private static final Pattern COURSE_LINE_PATTERN = Pattern.compile(
@@ -102,6 +99,18 @@ public class TaskFetchService {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    @Value("${google.oauth.client-id:}")
+    private String configuredClientId;
+
+    @Value("${google.oauth.client-secret:}")
+    private String configuredClientSecret;
+
+    @Value("${google.oauth.redirect-uri:http://localhost:8080/auth/callback}")
+    private String configuredRedirectUri;
+
+    private volatile String dynamicClientId = "";
+    private volatile String dynamicClientSecret = "";
+
     public TaskFetchService(
             TaskRepository taskRepository,
             NotificationSettingRepository notificationSettingRepository,
@@ -112,12 +121,81 @@ public class TaskFetchService {
         this.userRepository = userRepository;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(15))
                 .build();
     }
 
+    @PostConstruct
+    public void loadOAuthConfigFromFile() {
+        if (!Files.exists(OAUTH_CONFIG_PATH)) {
+            return;
+        }
+        Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(OAUTH_CONFIG_PATH)) {
+            props.load(in);
+            String fileClientId = props.getProperty("google.oauth.client-id", "").trim();
+            String fileClientSecret = props.getProperty("google.oauth.client-secret", "").trim();
+            if (!fileClientId.isBlank() && !fileClientSecret.isBlank()) {
+                this.dynamicClientId = fileClientId;
+                this.dynamicClientSecret = fileClientSecret;
+                log.info("ローカル OAuth 設定ファイルを読み込みました: {}", OAUTH_CONFIG_PATH);
+            }
+        } catch (IOException ex) {
+            log.warn("OAuth 設定ファイルの読み込みに失敗しました: {}", ex.getMessage());
+        }
+    }
+
     /**
-     * Gmail 取得時の例外（認証エラーか通信・設定エラーかを区別する）。
+     * ログイン画面から入力された Google OAuth 2.0 クライアントID / Secret を保存し、即座に反映する。
+     */
+    public synchronized void saveOAuthConfig(String clientId, String clientSecret) throws IOException {
+        String trimmedId = clientId != null ? clientId.trim() : "";
+        String trimmedSecret = clientSecret != null ? clientSecret.trim() : "";
+        if (trimmedId.isBlank() || trimmedSecret.isBlank()) {
+            throw new IllegalArgumentException("Google OAuth クライアントID と クライアントシークレットの両方を入力してください。");
+        }
+
+        if (OAUTH_CONFIG_PATH.getParent() != null) {
+            Files.createDirectories(OAUTH_CONFIG_PATH.getParent());
+        }
+        Properties props = new Properties();
+        props.setProperty("google.oauth.client-id", trimmedId);
+        props.setProperty("google.oauth.client-secret", trimmedSecret);
+        try (OutputStream out = Files.newOutputStream(OAUTH_CONFIG_PATH)) {
+            props.store(out, "Local Google OAuth 2.0 Credentials (ignored by git)");
+        }
+
+        this.dynamicClientId = trimmedId;
+        this.dynamicClientSecret = trimmedSecret;
+    }
+
+    public String getOAuthClientId() {
+        if (dynamicClientId != null && !dynamicClientId.isBlank()) {
+            return dynamicClientId;
+        }
+        return configuredClientId != null ? configuredClientId.trim() : "";
+    }
+
+    public String getOAuthClientSecret() {
+        if (dynamicClientSecret != null && !dynamicClientSecret.isBlank()) {
+            return dynamicClientSecret;
+        }
+        return configuredClientSecret != null ? configuredClientSecret.trim() : "";
+    }
+
+    public String getOAuthRedirectUri() {
+        return (configuredRedirectUri != null && !configuredRedirectUri.isBlank())
+                ? configuredRedirectUri.trim()
+                : "http://localhost:8080/auth/callback";
+    }
+
+    public boolean isOAuthConfigured() {
+        return !getOAuthClientId().isBlank() && !getOAuthClientSecret().isBlank();
+    }
+
+    /**
+     * Gmail / GAS 取得時の例外（認証エラーか通信・設定エラーかを区別する）。
      */
     public static class GmailFetchException extends RuntimeException {
         private final boolean authFailed;
@@ -134,6 +212,39 @@ public class TaskFetchService {
 
         public boolean isAuthFailed() {
             return authFailed;
+        }
+    }
+
+    /**
+     * GAS ウェブアプリからの取得結果 DTO。
+     */
+    public static class GasFetchResult {
+        private final String userId;
+        private final String email;
+        private final int totalMessages;
+        private final int syncedCount;
+
+        public GasFetchResult(String userId, String email, int totalMessages, int syncedCount) {
+            this.userId = userId;
+            this.email = email;
+            this.totalMessages = totalMessages;
+            this.syncedCount = syncedCount;
+        }
+
+        public String getUserId() {
+            return userId;
+        }
+
+        public String getEmail() {
+            return email;
+        }
+
+        public int getTotalMessages() {
+            return totalMessages;
+        }
+
+        public int getSyncedCount() {
+            return syncedCount;
         }
     }
 
@@ -224,7 +335,6 @@ public class TaskFetchService {
             }
         }
 
-        // 件名からのフォールバック補完
         if (subject != null && !subject.isBlank()) {
             if (courseName == null) {
                 courseName = extractCourseFromSubject(subject);
@@ -242,7 +352,6 @@ public class TaskFetchService {
             return Optional.empty();
         }
         if (deadline == null) {
-            // 公開通知のみで締切日時が省略されていた場合の安全フォールバック
             deadline = openTime;
         }
 
@@ -260,8 +369,7 @@ public class TaskFetchService {
     }
 
     /**
-     * ログイン済みユーザーの認証情報（Google アプリパスワード IMAP または OAuth 2.0 アクセストークン）を用いて
-     * 実際の Gmail から manaba の小テスト・課題通知メールを取得し、DB に登録/更新する。
+     * ログイン済みユーザーの連携方式（GAS または Google OAuth 2.0）に応じて Gmail から再同期する。
      */
     @Transactional
     public int fetchTasksFromGmail(String userId) {
@@ -272,100 +380,71 @@ public class TaskFetchService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new GmailFetchException("ユーザー情報が見つかりません。", true));
 
-        if (user.getImapPassword() != null && !user.getImapPassword().isBlank()) {
-            return fetchTasksFromGmailImap(userId, user.getEmail(), user.getImapPassword());
+        if ("GAS".equalsIgnoreCase(user.getAuthType())
+                || (user.getGasUrl() != null && !user.getGasUrl().isBlank())) {
+            GasFetchResult result = fetchTasksFromGas(userId, user.getGasUrl(), user.getGasToken());
+            return result.getSyncedCount();
         }
 
         if (user.getAccessToken() != null && !user.getAccessToken().isBlank()) {
-            return fetchTasksFromGmailApi(userId, user.getAccessToken());
+            return fetchTasksFromGmailApiWithRefresh(user);
         }
 
         throw new GmailFetchException(
-                "Gmail 連携情報（Googleアプリパスワード または OAuth 2.0 アクセストークン）が未設定です。"
-                        + "メール本文貼り付け、または再ログインで連携してください。",
+                "Google OAuth 2.0 または GAS ウェブアプリ連携が設定されていません。"
+                        + "「manaba通知メール / GAS JSON を貼り付けて追加」または再ログインで連携してください。",
                 false);
     }
 
-    /**
-     * Gmail IMAPS (imap.gmail.com:993) に接続して manaba 小テスト・課題通知メールを取得・保存する。
-     */
-    @Transactional
-    public int fetchTasksFromGmailImap(String userId, String email, String rawAppPassword) {
-        if (email == null || email.isBlank() || rawAppPassword == null || rawAppPassword.isBlank()) {
-            throw new GmailFetchException("メールアドレスと Google アプリパスワードを入力してください。", true);
-        }
-
-        String cleanPassword = rawAppPassword.replaceAll("\\s+", "");
-
-        Properties props = new Properties();
-        props.put("mail.store.protocol", "imaps");
-        props.put("mail.imaps.host", "imap.gmail.com");
-        props.put("mail.imaps.port", "993");
-        props.put("mail.imaps.ssl.enable", "true");
-        props.put("mail.imaps.connectiontimeout", "10000");
-        props.put("mail.imaps.timeout", "15000");
-        props.put("mail.imaps.writetimeout", "10000");
-
-        Store store = null;
-        Folder folder = null;
-        int syncedCount = 0;
-
+    private int fetchTasksFromGmailApiWithRefresh(User user) {
         try {
-            Session mailSession = Session.getInstance(props);
-            store = mailSession.getStore("imaps");
-            store.connect("imap.gmail.com", 993, email.trim(), cleanPassword);
-
-            folder = openTargetFolder(store);
-            folder.open(Folder.READ_ONLY);
-
-            SearchTerm searchTerm = new OrTerm(new SearchTerm[]{
-                    new FromStringTerm("manaba"),
-                    new SubjectTerm("manaba"),
-                    new SubjectTerm("小テスト"),
-                    new BodyTerm("manaba")
-            });
-
-            Message[] matched = folder.search(searchTerm);
-            if (matched == null || matched.length == 0) {
-                log.info("Gmail IMAP 接続成功（対象 manaba メール 0 件）: email={}", email);
-                return 0;
+            return fetchTasksFromGmailApi(user.getUserId(), user.getAccessToken());
+        } catch (GmailFetchException ex) {
+            if (ex.isAuthFailed()
+                    && user.getRefreshToken() != null && !user.getRefreshToken().isBlank()
+                    && isOAuthConfigured()) {
+                log.info("Gmail API トークン期限切れのため refresh_token で再取得を試行します: userId={}", user.getUserId());
+                String newAccessToken = refreshAccessToken(user.getRefreshToken());
+                user.setAccessToken(newAccessToken);
+                userRepository.save(user);
+                return fetchTasksFromGmailApi(user.getUserId(), newAccessToken);
             }
+            throw ex;
+        }
+    }
 
-            int start = Math.max(0, matched.length - MAX_IMAP_MESSAGES_TO_PARSE);
-            for (int i = matched.length - 1; i >= start; i--) {
-                Message msg = matched[i];
-                try {
-                    String subject = msg.getSubject();
-                    String body = extractTextFromPart(msg);
-                    Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, body);
-                    if (parsedOpt.isPresent()) {
-                        upsertParsedTask(userId, parsedOpt.get());
-                        syncedCount++;
-                    }
-                } catch (Exception ex) {
-                    log.warn("Gmail メッセージ1件の解析中にエラーが発生したためスキップします: {}", ex.getMessage());
-                }
+    private String refreshAccessToken(String refreshToken) {
+        try {
+            String formBody = "client_id=" + urlEncode(getOAuthClientId())
+                    + "&client_secret=" + urlEncode(getOAuthClientSecret())
+                    + "&refresh_token=" + urlEncode(refreshToken)
+                    + "&grant_type=refresh_token";
+
+            HttpRequest req = HttpRequest.newBuilder(URI.create("https://oauth2.googleapis.com/token"))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .timeout(Duration.ofSeconds(15))
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody, StandardCharsets.UTF_8))
+                    .build();
+
+            HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (res.statusCode() < 200 || res.statusCode() >= 300) {
+                throw new GmailFetchException(
+                        "Google OAuth リフレッシュトークンによる再認証に失敗しました。再度 Google ログインを行ってください。",
+                        true);
             }
-
-            log.info("Gmail IMAP 同期完了: email={}, matched={}, syncedTasks={}", email, matched.length, syncedCount);
-            return syncedCount;
-
-        } catch (AuthenticationFailedException ex) {
-            log.warn("Gmail IMAP 認証失敗: email={}, reason={}", email, ex.getMessage());
-            throw new GmailFetchException(
-                    "Gmail（imap.gmail.com）への接続認証に失敗しました。"
-                            + "Googleの仕様上、通常のログインパスワードでは外部アプリからメールを取得できません。"
-                            + "Googleアカウントの『16桁のアプリパスワード』（https://myaccount.google.com/apppasswords）を入力するか、OAuth 2.0 トークンで連携してください。",
-                    true,
-                    ex);
-        } catch (MessagingException ex) {
-            log.error("Gmail IMAP 通信エラー: email={}, error={}", email, ex.getMessage(), ex);
-            throw new GmailFetchException(
-                    "Gmail（imap.gmail.com）への接続中にエラーが発生しました: " + ex.getMessage(),
-                    false,
-                    ex);
-        } finally {
-            closeQuietly(folder, store);
+            JsonNode json = objectMapper.readTree(res.body());
+            String newToken = json.path("access_token").asText(null);
+            if (newToken == null || newToken.isBlank()) {
+                throw new GmailFetchException("アクセストークンの更新に失敗しました。再度 Google ログインを行ってください。", true);
+            }
+            return newToken;
+        } catch (GmailFetchException ex) {
+            throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new GmailFetchException("トークン更新通信が中断されました。", false, ex);
+        } catch (IOException ex) {
+            throw new GmailFetchException("トークン更新通信に失敗しました: " + ex.getMessage(), false, ex);
         }
     }
 
@@ -380,7 +459,7 @@ public class TaskFetchService {
 
         String trimmedToken = accessToken.trim();
         try {
-            String query = URLEncoder.encode("manaba OR 小テスト", StandardCharsets.UTF_8);
+            String query = URLEncoder.encode(GMAIL_SEARCH_QUERY, StandardCharsets.UTF_8);
             URI listUri = URI.create(
                     "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + query + "&maxResults=50");
 
@@ -390,7 +469,8 @@ public class TaskFetchService {
                     .GET()
                     .build();
 
-            HttpResponse<String> listRes = httpClient.send(listReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> listRes = httpClient.send(
+                    listReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (listRes.statusCode() == 401 || listRes.statusCode() == 403) {
                 throw new GmailFetchException(
                         "Gmail API の認証に失敗しました（HTTP " + listRes.statusCode() + "）。"
@@ -457,12 +537,133 @@ public class TaskFetchService {
     }
 
     /**
-     * 貼り付けられた manaba 通知メール本文（1通または複数通分）を解析して DB に登録・更新する。
+     * 既知の userId 向けに Google Apps Script (GAS) ウェブアプリから manaba メール JSON を取得・保存する。
+     */
+    @Transactional
+    public GasFetchResult fetchTasksFromGas(String userId, String gasUrl, String gasToken) {
+        return executeGasFetch(userId, null, gasUrl, gasToken);
+    }
+
+    /**
+     * 初回 GAS ログイン時用（メールアドレス未入力時は GAS 応答内の email から userId を決定する）。
+     */
+    @Transactional
+    public GasFetchResult fetchTasksFromGasForLogin(String optionalEmail, String gasUrl, String gasToken) {
+        return executeGasFetch(null, optionalEmail, gasUrl, gasToken);
+    }
+
+    private GasFetchResult executeGasFetch(
+            String knownUserId,
+            String optionalEmail,
+            String gasUrl,
+            String gasToken) {
+
+        if (gasUrl == null || gasUrl.isBlank()) {
+            throw new GmailFetchException("GAS ウェブアプリの URL を入力してください。", false);
+        }
+
+        String trimmedUrl = gasUrl.trim();
+        if (!trimmedUrl.startsWith("https://") && !trimmedUrl.startsWith("http://")) {
+            throw new GmailFetchException("GAS ウェブアプリ URL は https:// から始まる有効な URL を入力してください。", false);
+        }
+
+        String requestUrl = trimmedUrl;
+        if (gasToken != null && !gasToken.isBlank()) {
+            String separator = trimmedUrl.contains("?") ? "&" : "?";
+            requestUrl = trimmedUrl + separator + "token=" + urlEncode(gasToken.trim());
+        }
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(requestUrl))
+                    .header("Accept", "application/json")
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String bodyText = res.body() != null ? res.body().trim() : "";
+
+            if (isHtmlResponse(bodyText) || res.statusCode() == 401 || res.statusCode() == 403) {
+                throw new GmailFetchException(
+                        "GAS ウェブアプリの『アクセスできるユーザー』が『全員』になっていないか、"
+                                + "組織の制限により外部アクセスがブロックされています。"
+                                + "『全員』で再デプロイするか、GAS エディタで exportManabaJson を実行して出力 JSON を画面から貼り付けてください"
+                                + "（または Google OAuth 2.0 をご利用ください）。",
+                        true);
+            }
+
+            if (res.statusCode() < 200 || res.statusCode() >= 300) {
+                throw new GmailFetchException(
+                        "GAS ウェブアプリからの取得に失敗しました（HTTP " + res.statusCode() + "）。",
+                        false);
+            }
+
+            if (bodyText.isBlank()) {
+                throw new GmailFetchException("GAS ウェブアプリから空のレスポンスが返されました。", false);
+            }
+
+            JsonNode root = objectMapper.readTree(bodyText);
+            if (root.isObject() && root.has("error") && !root.path("error").asText("").isBlank()) {
+                throw new GmailFetchException(
+                        "GAS ウェブアプリエラー: " + root.path("error").asText(),
+                        true);
+            }
+
+            String gasEmail = root.isObject() ? root.path("email").asText("").trim().toLowerCase() : "";
+            String resolvedEmail = (optionalEmail != null && !optionalEmail.isBlank())
+                    ? optionalEmail.trim().toLowerCase()
+                    : (!gasEmail.isBlank() ? gasEmail : "gas-" + shortHash(trimmedUrl) + "@manaba-sync.local");
+
+            String targetUserId = (knownUserId != null && !knownUserId.isBlank())
+                    ? knownUserId
+                    : generateUserId(resolvedEmail);
+
+            JsonNode emailsNode = extractEmailsArrayNode(root);
+            int totalMessages = emailsNode != null ? emailsNode.size() : 0;
+            int syncedCount = upsertFromJsonArray(targetUserId, emailsNode);
+
+            return new GasFetchResult(targetUserId, resolvedEmail, totalMessages, syncedCount);
+        } catch (GmailFetchException ex) {
+            throw ex;
+        } catch (IllegalArgumentException ex) {
+            throw new GmailFetchException("GAS ウェブアプリ URL の形式が正しくありません: " + ex.getMessage(), false, ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new GmailFetchException("GAS ウェブアプリへの通信が中断されました。", false, ex);
+        } catch (IOException ex) {
+            throw new GmailFetchException("GAS ウェブアプリへの通信または JSON 解析に失敗しました: " + ex.getMessage(), false, ex);
+        }
+    }
+
+    /**
+     * 貼り付けられた manaba 通知メール本文（1通/複数通）または GAS の exportManabaJson() JSON を解析して登録する。
      */
     @Transactional
     public int importFromRawEmailText(String userId, String rawText) {
         if (userId == null || userId.isBlank() || rawText == null || rawText.isBlank()) {
             return 0;
+        }
+
+        String trimmed = rawText.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            try {
+                JsonNode root = objectMapper.readTree(trimmed);
+                if (root.isObject() && root.has("subject") && root.has("body")) {
+                    Optional<ParsedTask> single = parseManabaEmail(
+                            root.path("subject").asText(""),
+                            root.path("body").asText(""));
+                    if (single.isPresent()) {
+                        upsertParsedTask(userId, single.get());
+                        return 1;
+                    }
+                    return 0;
+                }
+                JsonNode emailsNode = extractEmailsArrayNode(root);
+                return upsertFromJsonArray(userId, emailsNode);
+            } catch (IOException ex) {
+                log.warn("JSON 形式でのメール取り込み解析に失敗しました: {}", ex.getMessage());
+                return 0;
+            }
         }
 
         List<String> blocks = splitRawEmailBlocks(rawText);
@@ -477,6 +678,47 @@ public class TaskFetchService {
             }
         }
         return imported;
+    }
+
+    private JsonNode extractEmailsArrayNode(JsonNode root) {
+        if (root == null || root.isMissingNode()) {
+            return null;
+        }
+        if (root.isArray()) {
+            return root;
+        }
+        if (root.has("emails") && root.get("emails").isArray()) {
+            return root.get("emails");
+        }
+        if (root.has("messages") && root.get("messages").isArray()) {
+            return root.get("messages");
+        }
+        return null;
+    }
+
+    private int upsertFromJsonArray(String userId, JsonNode emailsNode) {
+        if (emailsNode == null || !emailsNode.isArray()) {
+            return 0;
+        }
+        int syncedCount = 0;
+        for (JsonNode item : emailsNode) {
+            String subject = item.path("subject").asText("");
+            String body = item.path("body").asText("");
+            Optional<ParsedTask> parsedOpt = parseManabaEmail(subject, body);
+            if (parsedOpt.isPresent()) {
+                upsertParsedTask(userId, parsedOpt.get());
+                syncedCount++;
+            }
+        }
+        return syncedCount;
+    }
+
+    private boolean isHtmlResponse(String bodyText) {
+        String lower = bodyText.toLowerCase();
+        return lower.startsWith("<!doctype")
+                || lower.startsWith("<html")
+                || lower.contains("<title>google")
+                || lower.contains("accounts.google.com");
     }
 
     private List<String> splitRawEmailBlocks(String rawText) {
@@ -541,7 +783,6 @@ public class TaskFetchService {
         Task task;
         if (existingOpt.isPresent()) {
             task = existingOpt.get();
-            // 既に提出済みの状態は上書きせず、締切・公開日時・URLのみ最新化する
             if (parsed.getDeadline() != null) {
                 task.setDeadline(parsed.getDeadline());
             }
@@ -582,69 +823,6 @@ public class TaskFetchService {
             setting.setEnabled(true);
             notificationSettingRepository.save(setting);
         }
-    }
-
-    private Folder openTargetFolder(Store store) throws MessagingException {
-        for (String candidate : List.of("[Gmail]/すべてのメール", "[Gmail]/All Mail", "INBOX")) {
-            Folder f = store.getFolder(candidate);
-            if (f != null && f.exists()) {
-                return f;
-            }
-        }
-        return store.getFolder("INBOX");
-    }
-
-    private void closeQuietly(Folder folder, Store store) {
-        if (folder != null) {
-            try {
-                if (folder.isOpen()) {
-                    folder.close(false);
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        if (store != null) {
-            try {
-                if (store.isConnected()) {
-                    store.close();
-                }
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
-    private String extractTextFromPart(Part part) throws MessagingException, IOException {
-        if (part == null) {
-            return "";
-        }
-        if (part.isMimeType("text/plain")) {
-            Object content = part.getContent();
-            return content != null ? content.toString() : "";
-        }
-        if (part.isMimeType("text/html")) {
-            Object content = part.getContent();
-            return htmlToPlainText(content != null ? content.toString() : "");
-        }
-        if (part.isMimeType("multipart/*")) {
-            Multipart mp = (Multipart) part.getContent();
-            StringBuilder plain = new StringBuilder();
-            StringBuilder htmlFallback = new StringBuilder();
-            for (int i = 0; i < mp.getCount(); i++) {
-                Part bp = mp.getBodyPart(i);
-                if (bp.isMimeType("text/plain")) {
-                    plain.append(extractTextFromPart(bp)).append('\n');
-                } else if (bp.isMimeType("text/html")) {
-                    htmlFallback.append(extractTextFromPart(bp)).append('\n');
-                } else if (bp.isMimeType("multipart/*")) {
-                    String nested = extractTextFromPart(bp);
-                    if (!nested.isBlank()) {
-                        plain.append(nested).append('\n');
-                    }
-                }
-            }
-            return !plain.toString().isBlank() ? plain.toString() : htmlFallback.toString();
-        }
-        return "";
     }
 
     private String extractHeaderValue(JsonNode headers, String name) {
@@ -700,7 +878,7 @@ public class TaskFetchService {
         if (html == null || html.isBlank()) {
             return "";
         }
-        String text = html
+        return html
                 .replaceAll("(?i)<br\\s*/?>", "\n")
                 .replaceAll("(?i)</(p|div|tr|li|h[1-6])>", "\n")
                 .replaceAll("(?i)<td[^>]*>", " ")
@@ -711,7 +889,6 @@ public class TaskFetchService {
                 .replace("&gt;", ">")
                 .replace("&quot;", "\"")
                 .replace("&#39;", "'");
-        return text;
     }
 
     private String extractCourseFromSubject(String subject) {
@@ -801,7 +978,6 @@ public class TaskFetchService {
                 .replaceAll("\\s+", " ")
                 .trim();
 
-        // "2026-11-18 23:" のように分が省略された形式への補完
         if (normalized.endsWith(":")) {
             normalized = normalized + "00";
         }
@@ -813,5 +989,19 @@ public class TaskFetchService {
             }
         }
         return null;
+    }
+
+    private String generateUserId(String email) {
+        return "user-" + UUID.nameUUIDFromBytes(email.getBytes(StandardCharsets.UTF_8))
+                .toString().substring(0, 12);
+    }
+
+    private String shortHash(String value) {
+        return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8))
+                .toString().substring(0, 8);
+    }
+
+    private String urlEncode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }
