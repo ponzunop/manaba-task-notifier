@@ -20,9 +20,10 @@
 
 ```
 [機能A: 大友] AuthController / TaskFetchService
-   │ Google OAuth 2.0 (Gmail API) / GAS 連携、またはメール本文・GAS JSON 貼り付けから manaba 小テスト通知を解析
+   │ GAS（自分のみ）ブラウザ連携（POST /auth/gas-browser-start → /auth/gas-callback）、
+   │ Google OAuth 2.0 (Gmail API)、またはメール本文・GAS JSON 貼り付けから manaba 小テスト通知を解析
    │ 科目名・小テスト名・公開時間 (openTime)・締切時間 (deadline)・URL (taskUrl)・種別 (taskType) を保存
-   │ セッション "user_id" および Cookie "user_id" を発行して /tasks へ遷移
+   │ セッション "user_id" および同期診断情報（lastSyncScannedCount, lastSyncSyncedCount, lastSyncSkippedSamples）を保持して /tasks へ遷移
    ▼
 [機能B: 蘆川] TaskController / tasks.html
    │ 1. tasks テーブルを user_id で検索し deadline 昇順で表示
@@ -73,8 +74,9 @@
 - **締切時間（受付終了）**: `deadline`（`yyyy/MM/dd HH:mm`）と現在時刻からの残り時間を表示
 - **状態・操作**: 緊急度バッジ（`期限超過` / `締切間近` / `公開前` / `3日以内` / `受付中` / `受験済`）と「受験済みにする / 提出済みにする」ボタン（完了後は「未受験に戻す / 未提出に戻す」）
 
-### (2) 上部アクションバーと2種類のモーダル
-- **「Gmailから最新の小テストを取得」**: `POST /auth/fetch-tasks` を実行し、Google OAuth 2.0（Gmail API）または GAS 連携により最新の manaba 通知を再取得
+### (2) 上部アクションバー・デバッグパネル・モーダル
+- **「Gmailから最新の小テストを取得」 / ナビバー「Gmailから再同期」**: `POST /auth/fetch-tasks` を実行し、GAS（自分のみ）ブラウザ連携時はブラウザ経由でワンクリック再取得、Google OAuth 2.0（Gmail API）連携時は API 経由で最新の manaba 通知を再取得
+- **「自動解析できなかったメールの形式を確認（デバッグ用）」折りたたみパネル**: `HttpSession` の `lastSyncSkippedSamples`（および `lastSyncScannedCount` / `lastSyncSyncedCount`）が存在する場合に表示し、大学固有書式などで自動抽出できなかったメールの件名・本文先頭を確認可能
 - **「manaba通知メール本文 / GAS JSON を貼り付けて追加」モーダル**: `POST /auth/import-email`（`rawText`）へ manaba 通知メール本文、または GAS `exportManabaJson()` 出力 JSON を送信し、自動解析して一括登録
 - **「＋ 小テストを手動追加」モーダル**: `POST /tasks/create` へ種別・科目名・小テスト名・公開時間・締切時間・URL を送信して登録
 

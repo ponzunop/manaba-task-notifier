@@ -707,6 +707,50 @@
             color: var(--text-main);
         }
 
+        /* 同期診断・解析不可メールデバッグパネル */
+        .debug-panel {
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 18px;
+            font-size: 0.9rem;
+        }
+
+        .debug-panel summary {
+            cursor: pointer;
+            font-weight: 700;
+            color: #92400e;
+            outline: none;
+        }
+
+        .debug-panel-meta {
+            margin: 8px 0 10px;
+            font-size: 0.84rem;
+            color: #78350f;
+        }
+
+        .debug-sample-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .debug-sample-item {
+            background: #ffffff;
+            border: 1px solid #fde68a;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.8rem;
+            line-height: 1.45;
+            color: #1e293b;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         /* モーダル */
         .modal-backdrop {
             display: none;
@@ -835,7 +879,9 @@
         </div>
         <div class="nav-actions">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
-                <button type="submit" class="btn-nav btn-nav-sync" title="OAuth 2.0 / GAS連携でGmailから最新の小テストを取得">Gmail同期</button>
+                <button type="submit"
+                        class="btn-nav btn-nav-sync"
+                        title="GAS（自分のみ）連携またはOAuth 2.0連携でGmailからワンクリック再同期">Gmailから再同期</button>
             </form>
             <button type="button" id="push-permission-btn" class="btn-nav btn-nav-push">通知許可を確認中</button>
             <span class="user-chip" th:text="${userDisplayName}">user</span>
@@ -858,12 +904,17 @@
     <section class="quick-actions-bar" aria-label="小テスト情報の取得と追加">
         <div class="quick-actions-left">
             <form th:action="@{/auth/fetch-tasks}" method="post" class="inline-form">
-                <button type="submit" class="btn-accent" title="Google OAuth 2.0 / GAS連携によりGmailから取得">Gmailから最新の小テストを取得</button>
+                <button type="submit"
+                        class="btn-accent"
+                        title="GAS（自分のみ）ブラウザ連携またはGoogle OAuth 2.0連携によりワンクリックで最新メールから取得">Gmailから最新の小テストを取得</button>
             </form>
             <button type="button" id="open-import-modal-btn" class="btn-outline">manaba通知メール本文 / GAS JSON を貼り付けて追加</button>
             <button type="button" id="open-create-modal-btn" class="btn-primary">＋ 小テストを手動追加</button>
         </div>
-        <span class="page-subtitle" th:if="${userEmail != ''}" th:text="'連携アカウント: ' + ${userEmail}">連携アカウント</span>
+        <span class="page-subtitle" th:if="${userEmail != ''}">
+            <span th:text="'連携アカウント: ' + ${userEmail}">連携アカウント</span>
+            <span th:if="${isGasBrowserAuth}">（GAS「自分のみ」連携・ワンクリック再同期対応）</span>
+        </span>
     </section>
 
     <div th:if="${successMessage}" class="alert alert-success" role="status">
@@ -872,6 +923,27 @@
     <div th:if="${errorMessage}" class="alert alert-error" role="alert">
         <span th:text="${errorMessage}">エラーが発生しました</span>
     </div>
+
+    <details th:if="${lastSyncSkippedSamples != null and !#lists.isEmpty(lastSyncSkippedSamples)}" class="debug-panel">
+        <summary>
+            自動解析できなかったメールの形式を確認（デバッグ用：
+            <span th:text="${#lists.size(lastSyncSkippedSamples)}">0</span>件）
+        </summary>
+        <p class="debug-panel-meta">
+            <span th:if="${lastSyncScannedCount != null}">
+                スキャン対象メール: <strong th:text="${lastSyncScannedCount}">0</strong> 件
+            </span>
+            <span th:if="${lastSyncSyncedCount != null}">
+                / 登録・更新成功: <strong th:text="${lastSyncSyncedCount}">0</strong> 件
+            </span>
+            — 以下のメールは自動抽出できなかったため、件名・本文の書式確認用として先頭を表示しています。
+        </p>
+        <div class="debug-sample-list">
+            <pre th:each="sample : ${lastSyncSkippedSamples}"
+                 class="debug-sample-item"
+                 th:text="${sample}">Skipped mail sample</pre>
+        </div>
+    </details>
 
     <!-- サマリーカード -->
     <section class="stats-grid" aria-label="小テスト・課題状況サマリー">
