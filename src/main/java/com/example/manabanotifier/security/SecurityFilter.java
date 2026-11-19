@@ -67,13 +67,19 @@ public class SecurityFilter extends OncePerRequestFilter {
         String method = request.getMethod() != null ? request.getMethod().toUpperCase() : "GET";
         if (!SAFE_METHODS.contains(method)) {
             if ("/auth/gas-callback".equals(path)) {
-                // GAS HtmlService からのクロスサイト POST は SameSite=Lax のためセッション Cookie が付かない。
-                // 代わりにブラウザが改ざん不能な Origin / Referer を Google Apps Script ドメインに厳格制限する。
+                // GAS HtmlService からのクロスサイト POST は SameSite=Lax のためセッション Cookie が付かず、
+                // さらにサンドボックス iframe (userCodeAppPanel) からのフォーム送信では Origin: null / Referer なしになる。
+                // そのため Google Apps Script 公式オリジン、またはサンドボックス iframe からの
+                // トップレベルフォーム送信（Origin: null + Sec-Fetch-Mode: navigate + Sec-Fetch-Dest: document）のみ許可し、
+                // 悪意ある外部ドメインや XHR/fetch を確実に遮断する。
                 String origin = request.getHeader("Origin");
                 String referer = request.getHeader("Referer");
+                String secFetchMode = request.getHeader("Sec-Fetch-Mode");
+                String secFetchDest = request.getHeader("Sec-Fetch-Dest");
                 String sameOrigin = buildRequestOrigin(request);
-                if (!SecurityUtils.isTrustedGasCallbackSource(origin, referer, sameOrigin)) {
-                    log.warn("不正なオリジンからの GAS コールバックを拒否しました: origin={}, referer={}", origin, referer);
+                if (!SecurityUtils.isTrustedGasCallbackSource(origin, referer, sameOrigin, secFetchMode, secFetchDest)) {
+                    log.warn("不正なオリジンからの GAS コールバックを拒否しました: origin={}, referer={}, mode={}, dest={}",
+                            origin, referer, secFetchMode, secFetchDest);
                     sendForbidden(request, response, "不正な送信元からのリクエストです。");
                     return;
                 }

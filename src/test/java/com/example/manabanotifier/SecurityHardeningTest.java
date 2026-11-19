@@ -102,6 +102,9 @@ class SecurityHardeningTest {
                 "https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbyUhoA5hshULJndfIheqnALZOJngywTkw9SetzBA5epdvQAyBnIwCbynsasq1l5KK_PLA/exec"))
                 .isTrue();
         assertThat(SecurityUtils.isValidGoogleAppsScriptUrl(
+                "https://script.google.com/a/chibatech.ac.jp/macros/s/AKfycbyUhoA5hshULJndfIheqnALZOJngywTkw9SetzBA5epdvQAyBnIwCbynsasq1l5KK_PLA/exec"))
+                .isTrue();
+        assertThat(SecurityUtils.isValidGoogleAppsScriptUrl(
                 "https://script.google.com/macros/s/AKfycby1234567890abcdef/exec"))
                 .isTrue();
 
@@ -150,6 +153,23 @@ class SecurityHardeningTest {
         mockMvc.perform(post("/auth/gas-callback")
                         .param("payload", payload))
                 .andExpect(status().isForbidden());
+
+        // サンドボックス iframe からの XHR/fetch (Sec-Fetch-Mode: cors) は 403 拒否
+        mockMvc.perform(post("/auth/gas-callback")
+                        .header("Origin", "null")
+                        .header("Sec-Fetch-Mode", "cors")
+                        .header("Sec-Fetch-Dest", "empty")
+                        .param("payload", payload))
+                .andExpect(status().isForbidden());
+
+        // GAS HtmlService サンドボックス iframe からの実フォーム送信（Origin: null + navigate + document）は成功すること
+        mockMvc.perform(post("/auth/gas-callback")
+                        .header("Origin", "null")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Dest", "document")
+                        .param("payload", payload))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/tasks?synced=true"));
 
         // Google Apps Script サンドボックスオリジンからの正当な POST は成功しセッション確立
         MvcResult gasResult = mockMvc.perform(post("/auth/gas-callback")

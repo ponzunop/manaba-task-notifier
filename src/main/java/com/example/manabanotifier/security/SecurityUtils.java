@@ -19,10 +19,11 @@ public final class SecurityUtils {
     /**
      * Google Apps Script ウェブアプリの正規パス形式のみ許可する。
      * - 通常アカウント: /macros/s/<deploymentId>/exec
-     * - Google Workspace: /a/macros/<domain>/s/<deploymentId>/exec
+     * - Google Workspace（デプロイ画面）: /a/macros/<domain>/s/<deploymentId>/exec
+     * - Google Workspace（ScriptApp.getService().getUrl()）: /a/<domain>/macros/s/<deploymentId>/exec
      */
     private static final Pattern GAS_EXEC_PATH_PATTERN = Pattern.compile(
-            "^(?:/a/macros/[A-Za-z0-9.-]{1,128}/s/|/macros/s/)[A-Za-z0-9_-]{10,200}/exec$");
+            "^(?:/a/macros/[A-Za-z0-9.-]{1,128}/s/|/a/[A-Za-z0-9.-]{1,128}/macros/s/|/macros/s/)[A-Za-z0-9_-]{10,200}/exec$");
 
     private static final Pattern GMAIL_MSG_ID_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{1,128}$");
 
@@ -106,27 +107,54 @@ public final class SecurityUtils {
     }
 
     /**
-     * POST /auth/gas-callback の Origin / Referer が Google Apps Script または同一オリジンかを検証する。
+     * POST /auth/gas-callback の送信元を検証する。
+     * - 信頼できる Google Apps Script オリジン（https://script.google.com / https://*.googleusercontent.com）または同一オリジンを許可
+     * - GAS HtmlService のサンドボックス iframe（userCodeAppPanel）からのフォーム送信では、
+     *   ブラウザが Origin: "null"（かつ HTTPS→HTTP 遷移により Referer なし）を送るため、
+     *   トップレベルナビゲーション（Sec-Fetch-Mode: navigate かつ Sec-Fetch-Dest: document）の場合のみ許可する
+     * - 明示的な外部攻撃サイト（Origin: https://evil.example.com 等）や fetch/XHR（cors）はすべて拒否する
      */
-    public static boolean isTrustedGasCallbackSource(String originHeader, String refererHeader, String sameOrigin) {
+    public static boolean isTrustedGasCallbackSource(
+            String originHeader,
+            String refererHeader,
+            String sameOrigin,
+            String secFetchMode,
+            String secFetchDest) {
+
         if (originHeader != null && !originHeader.isBlank()) {
-            return isAllowedGasOrigin(originHeader.trim(), sameOrigin);
+            String trimmedOrigin = originHeader.trim();
+            if ("null".equalsIgnoreCase(trimmedOrigin)) {
+                // Referer がある場合は信頼ドメインであることを確認
+                if (refererHeader != null && !refererHeader.isBlank()) {
+                    if (!isTrustedReferer(refererHeader, sameOrigin)) {
+                        return false;
+                    }
+                }
+                // サンドボックス iframe からのトップレベルフォーム送信（navigate + document）のみ許可
+                return "navigate".equalsIgnoreCase(secFetchMode)
+                        && "document".equalsIgnoreCase(secFetchDest);
+            }
+            return isAllowedGasOrigin(trimmedOrigin, sameOrigin);
         }
         if (refererHeader != null && !refererHeader.isBlank()) {
-            try {
-                URI refUri = URI.create(refererHeader.trim());
-                if (refUri.getScheme() == null || refUri.getHost() == null) {
-                    return false;
-                }
-                String reconstructed = refUri.getScheme().toLowerCase(Locale.ROOT)
-                        + "://" + refUri.getHost().toLowerCase(Locale.ROOT)
-                        + (refUri.getPort() != -1 ? ":" + refUri.getPort() : "");
-                return isAllowedGasOrigin(reconstructed, sameOrigin);
-            } catch (IllegalArgumentException ex) {
-                return false;
-            }
+            return isTrustedReferer(refererHeader, sameOrigin);
         }
         return false;
+    }
+
+    private static boolean isTrustedReferer(String refererHeader, String sameOrigin) {
+        try {
+            URI refUri = URI.create(refererHeader.trim());
+            if (refUri.getScheme() == null || refUri.getHost() == null) {
+                return false;
+            }
+            String reconstructed = refUri.getScheme().toLowerCase(Locale.ROOT)
+                    + "://" + refUri.getHost().toLowerCase(Locale.ROOT)
+                    + (refUri.getPort() != -1 ? ":" + refUri.getPort() : "");
+            return isAllowedGasOrigin(reconstructed, sameOrigin);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 
     private static boolean isAllowedGasOrigin(String origin, String sameOrigin) {

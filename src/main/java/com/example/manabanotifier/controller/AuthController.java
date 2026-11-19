@@ -38,9 +38,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 連携・ログイン（ブラウザ経由 GAS「自分のみ」公開 / Google OAuth 2.0 / GAS JSON 貼付）・Web Push購読コントローラ（担当：大友）。
@@ -59,7 +61,12 @@ public class AuthController {
     private static final String SESSION_SYNC_SYNCED = "lastSyncSyncedCount";
     private static final String SESSION_SYNC_SKIPPED = "lastSyncSkippedSamples";
     private static final String COOKIE_USER_ID = "user_id";
+    private static final Duration PENDING_GAS_TTL = Duration.ofMinutes(10);
 
+    private record PendingGasFlow(String gasUrl, String email, Instant createdAt) {
+    }
+
+    private final ConcurrentHashMap<String, PendingGasFlow> pendingGasFlows = new ConcurrentHashMap<>();
     private final UserRepository userRepository;
     private final TaskFetchService taskFetchService;
     private final ObjectMapper objectMapper;
@@ -162,7 +169,8 @@ public class AuthController {
             session.removeAttribute(SESSION_PENDING_EMAIL);
         }
 
-        String redirectTarget = buildGasBrowserRedirectUrl(trimmedUrl, trimmedEmail);
+        String gasState = registerPendingGasFlow(trimmedUrl, trimmedEmail);
+        String redirectTarget = buildGasBrowserRedirectUrl(trimmedUrl, trimmedEmail, gasState);
         return "redirect:" + redirectTarget;
     }
 
@@ -172,6 +180,7 @@ public class AuthController {
     @PostMapping("/auth/gas-callback")
     public String handleGasBrowserCallback(
             @RequestParam(required = false) String payload,
+            @RequestParam(required = false) String gasState,
             HttpServletRequest request,
             HttpSession session,
             HttpServletResponse response,
@@ -185,12 +194,30 @@ public class AuthController {
         ImportResult meta = taskFetchService.peekGasPayloadMetadata(payload);
         User existingSessionUser = resolveExistingUser(session);
 
-        String pendingEmail = getSessionString(session, SESSION_PENDING_EMAIL);
-        String pendingGasUrl = getSessionString(session, SESSION_PENDING_GAS_URL);
+        PendingGasFlow matchedPending = consumePendingGasFlow(gasState, meta.getDetectedEmail());
+        if (gasState != null && !gasState.isBlank() && matchedPending == null) {
+            log.warn("GAS コールバックの gasState が無効または期限切れです");
+            return "redirect:/login?error=oauth_failed";
+        }
+        // GAS v1（gasState 非対応）の場合も、payload 内の gasUrl が Google Apps Script 公式 URL であること、
+        // または直近の GAS 開始フローに一致することを要求する
+        if (matchedPending == null && !SecurityUtils.isValidGoogleAppsScriptUrl(meta.getDetectedGasUrl())) {
+            log.warn("GAS コールバックに有効な gasState も公式 gasUrl も含まれていません");
+            return "redirect:/login?error=oauth_failed";
+        }
+
+        String pendingEmail = firstNonBlank(
+                getSessionString(session, SESSION_PENDING_EMAIL),
+                matchedPending != null ? matchedPending.email() : null
+        );
+        String pendingGasUrl = firstNonBlank(
+                getSessionString(session, SESSION_PENDING_GAS_URL),
+                matchedPending != null ? matchedPending.gasUrl() : null
+        );
 
         String resolvedGasUrl = firstNonBlank(
-                meta.getDetectedGasUrl(),
                 SecurityUtils.isValidGoogleAppsScriptUrl(pendingGasUrl) ? pendingGasUrl : null,
+                meta.getDetectedGasUrl(),
                 existingSessionUser != null ? existingSessionUser.getGasUrl() : null
         );
         String resolvedEmail = firstNonBlank(
@@ -728,7 +755,8 @@ public class AuthController {
             if (user.getEmail() != null) {
                 session.setAttribute(SESSION_PENDING_EMAIL, user.getEmail());
             }
-            return "redirect:" + buildGasBrowserRedirectUrl(user.getGasUrl(), user.getEmail());
+            String gasState = registerPendingGasFlow(user.getGasUrl(), user.getEmail());
+            return "redirect:" + buildGasBrowserRedirectUrl(user.getGasUrl(), user.getEmail(), gasState);
         }
 
         try {
@@ -759,16 +787,48 @@ public class AuthController {
         return "redirect:/login?logout=true";
     }
 
-    private String buildGasBrowserRedirectUrl(String gasUrl, String email) {
+    private String registerPendingGasFlow(String gasUrl, String email) {
+        purgeExpiredPendingGasFlows();
+        String state = SecurityUtils.generateSecureToken();
+        pendingGasFlows.put(state, new PendingGasFlow(gasUrl, email, Instant.now()));
+        return state;
+    }
+
+    private PendingGasFlow consumePendingGasFlow(String gasState, String detectedEmail) {
+        purgeExpiredPendingGasFlows();
+        if (gasState != null && !gasState.isBlank()) {
+            return pendingGasFlows.remove(gasState.trim());
+        }
+        if (detectedEmail != null && !detectedEmail.isBlank()) {
+            String target = detectedEmail.trim().toLowerCase();
+            for (Map.Entry<String, PendingGasFlow> entry : pendingGasFlows.entrySet()) {
+                PendingGasFlow flow = entry.getValue();
+                if (flow.email() != null && flow.email().equalsIgnoreCase(target)) {
+                    return pendingGasFlows.remove(entry.getKey());
+                }
+            }
+        }
+        return null;
+    }
+
+    private void purgeExpiredPendingGasFlows() {
+        Instant cutoff = Instant.now().minus(PENDING_GAS_TTL);
+        pendingGasFlows.entrySet().removeIf(e -> e.getValue().createdAt().isBefore(cutoff));
+    }
+
+    private String buildGasBrowserRedirectUrl(String gasUrl, String email, String gasState) {
         String origin = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
         String returnUrl = origin + "/auth/gas-callback";
 
         // Google Apps Script (ESF) reserves the "callback" query param for JSONP and returns HTTP 400 for URL values.
-        // Use "returnUrl" instead (older deployed GAS scripts also fall back to http://localhost:8080/auth/gas-callback).
+        // Use "returnUrl" + one-time "gasState" instead.
         String separator = gasUrl.contains("?") ? "&" : "?";
         StringBuilder sb = new StringBuilder(gasUrl);
         sb.append(separator).append("returnUrl=").append(urlEncode(returnUrl));
         sb.append("&gasUrl=").append(urlEncode(gasUrl));
+        if (gasState != null && !gasState.isBlank()) {
+            sb.append("&gasState=").append(urlEncode(gasState));
+        }
         if (email != null && !email.isBlank()) {
             sb.append("&email=").append(urlEncode(email));
         }

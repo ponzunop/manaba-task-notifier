@@ -108,6 +108,7 @@ function doGet(e) {
     : 'http://localhost:8080/auth/gas-callback';
   var paramEmail = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.email) ? e.parameter.email : '';
   var paramGasUrl = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasUrl) ? e.parameter.gasUrl : '';
+  var paramGasState = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasState) ? e.parameter.gasState : '';
 
   var payload = collectManabaMessages(paramEmail, paramGasUrl);
   var payloadJson = JSON.stringify(payload);
@@ -121,6 +122,7 @@ function doGet(e) {
     + '&lt;p&gt;下の青いボタンを押してアプリへ送信・ログインしてください。&lt;/p&gt;'
     + '&lt;form id="syncForm" method="POST" action="' + escapeHtmlAttr(returnUrl) + '" target="_top"&gt;'
     + '&lt;input type="hidden" name="payload" value="' + escapeHtmlAttr(payloadJson) + '"&gt;'
+    + (paramGasState ? '&lt;input type="hidden" name="gasState" value="' + escapeHtmlAttr(paramGasState) + '"&gt;' : '')
     + '&lt;button type="submit" class="btn"&gt;アプリへ送信してログインする（取得件数: ' + count + '件）&lt;/button&gt;'
     + '&lt;/form&gt;'
     + '&lt;button type="button" class="btn btn2" onclick="copyJson()"&gt;JSONをコピー&lt;/button&gt;'
