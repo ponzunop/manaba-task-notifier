@@ -52,7 +52,7 @@ flowchart LR
 flowchart TD
     Root["GET / または /login"] -->|"未ログイン"| Login["連携画面 (login.html)"]
     Root -->|"ログイン済み (Session / Cookie)"| Tasks["課題一覧画面 (tasks.html)<br/>GET /tasks"]
-    Login -->|"GET /auth/google → /auth/callback<br/>POST /auth/gas-login / POST /auth/login"| Tasks
+    Login -->|"POST /auth/gas-browser-start → GAS(自分のみ)<br/>→ POST /auth/gas-callback / OAuth 2.0"| Tasks
     Tasks <-->|"ナビゲーション切替"| Settings["通知設定画面 (settings.html)<br/>GET /settings"]
     Tasks <-->|"ナビゲーション切替"| History["通知履歴画面 (history.html)<br/>GET /history"]
     Settings <-->|"ナビゲーション切替"| History
@@ -134,9 +134,9 @@ cd manaba-notifier
 詳細設計書の利用シーン（1〜6）に沿って、以下の順で一通りの機能を実演できます。
 
 1. **ログイン・実 Gmail 連携（`/login`）**
-   - **方法①（Google OAuth 2.0）**: 画面内の設定パネルからクライアント ID / シークレットを保存（再起動不要・`config/google-oauth.properties` にローカル保存）して「Google アカウントでログイン & Gmail 連携」を実行、または OAuth 2.0 Playground のアクセストークンで直接連携します。
-   - **方法②（Google Apps Script / GAS 連携）**: ログイン画面の GAS コードをコピーして自分の Google アカウントでウェブアプリとしてデプロイし、URL を貼り付けるだけでアプリパスワード・Google Cloud 設定不要で実 Gmail の manaba 小テストメールを取得します。
-   - **スキップログイン＋貼り付け**: メールアドレスのみでログインし、ログイン後に manaba 通知メール本文や GAS の `exportManabaJson()` 出力 JSON を貼り付けて取り込むことも可能です。
+   - **方法①（大学アカウント対応・最推奨：ブラウザ経由 GAS 連携）**: ログイン画面の GAS コードをコピーして自分の Google アカウントで **「アクセスできるユーザー：自分のみ」** のウェブアプリとしてデプロイし、URL（`.../exec`）を入力して「GAS を開いて自分の Gmail から小テストを取得＆ログイン」を押します。Google にログイン済みのブラウザ経由で GAS を開き、HTML フォーム POST（`/auth/gas-callback`）で Spring Boot へ自動送信するため、アプリパスワード・Google Cloud 設定・HTTPS・「全員」公開が一切不要です。
+   - **方法②（Google OAuth 2.0 + Gmail API）**: 個人 Google アカウント等で Google Cloud Console が使える場合、画面内の設定パネルからクライアント ID / シークレットを保存（再起動不要）して認証できます。
+   - **方法③（GAS JSON / メール本文貼り付け）**: 画面遷移が使えない環境でも、`exportManabaJson()` 出力 JSON やメール本文を貼り付けて即座に取り込めます。
    - 画面の「通知を許可する」ボタンでブラウザの通知許可と `/auth/push-subscribe` 登録を有効化できます。
 2. **課題・小テスト一覧の確認（`/tasks`）**
    - 締切が近い順に並んだ小テスト・課題と、種別バッジ・公開時間・締切時間・残り時間・緊急度バッジを確認します。
