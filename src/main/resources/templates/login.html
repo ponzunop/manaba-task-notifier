@@ -13,17 +13,17 @@
             <span class="brand-icon">M</span>
             <span>manaba 課題通知システム</span>
         </a>
-        <span class="badge badge-primary">Team 12 / OAuth 2.0 &amp; GAS 連携</span>
+        <span class="badge badge-primary">Team 12 / 大学アカウント対応</span>
     </div>
 </header>
 
 <main class="login-wrapper">
     <section class="login-hero">
-        <span class="badge badge-primary">Google OAuth 2.0 / GAS × Web Push 連携</span>
+        <span class="badge badge-primary">ブラウザ経由 GAS（自分のみ公開）× Web Push 連携</span>
         <h1>manaba の小テスト・課題締切を、あなたの Gmail から自動取得。</h1>
         <p>
-            大学 Google アカウント（Google Workspace）でも安心して使える
-            <strong>Google OAuth 2.0</strong> と <strong>Google Apps Script (GAS)</strong> の2つの連携方式に対応しています。
+            大学 Google アカウント（<code>@chibatech.ac.jp</code> 等）でも組織制限に引っかからず、
+            <strong>Google Cloud 設定不要・GAS アクセス権限「自分のみ」</strong>で安全に小テスト情報を取得できます。
         </p>
     </section>
 
@@ -33,224 +33,251 @@
     <div th:if="${logoutMessage}" class="alert alert-success" th:text="${logoutMessage}"></div>
 
     <div class="login-main">
-        <!-- 左カラム：2大連携方式 + スキップログイン -->
+        <!-- 左カラム：方法①（最推奨GASブラウザ連携）＋方法②・③ -->
         <div>
-            <!-- 方法①：Google OAuth 2.0 + Gmail API -->
-            <section class="card">
+            <!-- 方法①：Google Apps Script (GAS) ブラウザ連携（自分のみ公開） -->
+            <section class="card" style="border: 2px solid var(--primary);">
                 <div class="card-header">
-                    <h2 class="card-title">方法①：Google アカウントでログイン（OAuth 2.0）</h2>
-                    <span th:if="${oauthConfigured}" class="badge badge-success">設定済み</span>
-                    <span th:unless="${oauthConfigured}" class="badge badge-warning">初回設定が必要</span>
+                    <h2 class="card-title">方法①：GAS ブラウザ連携（大学アカウント対応・最推奨）</h2>
+                    <span class="badge badge-success">アクセス権限「自分のみ」でOK</span>
                 </div>
 
-                <p style="margin-top: 0; font-size: 0.88rem; color: var(--text-muted);">
-                    詳細設計書準拠の Google OAuth 2.0（<code>gmail.readonly</code> スコープ）でログインし、
-                    manaba の小テスト・課題通知メールを自動取得します（リフレッシュトークン自動更新対応）。
+                <p style="margin-top: 0; font-size: 0.9rem; color: var(--text);">
+                    Google にログイン済みのあなたのブラウザ経由で GAS を開くため、デプロイ時の
+                    <strong>「アクセスできるユーザー：自分のみ」（「全員」にする必要なし！）</strong>のまま動作します。
                 </p>
 
-                <a th:href="@{/auth/google}" class="btn btn-google btn-block" id="google-oauth-btn">
-                    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                        <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"/>
-                        <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"/>
-                        <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"/>
-                        <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"/>
-                    </svg>
-                    <span>Google アカウントでログイン &amp; Gmail 連携</span>
-                </a>
+                <div style="padding: 0.85rem 1rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 1rem; font-size: 0.84rem;">
+                    <strong style="display: block; margin-bottom: 0.4rem; color: var(--primary-dark);">3ステップで連携（初回のみ約1分）</strong>
+                    <ol style="margin: 0 0 0.6rem 1.2rem; padding: 0; line-height: 1.75; color: var(--text);">
+                        <li><a href="https://script.google.com" target="_blank" rel="noopener noreferrer"><strong>Google Apps Script (script.google.com)</strong></a> を大学アカウントで開き、「新しいプロジェクト」を作成</li>
+                        <li>下の「GASコードをコピー」を押して貼り付け、保存（<code>Ctrl+S</code>）</li>
+                        <li>「デプロイ」→「新しいデプロイ」→ 種類の歯車「ウェブアプリ」を選択し、<br>
+                            <strong>次のユーザーとして実行：自分</strong> / <strong>アクセスできるユーザー：自分のみ</strong> でデプロイ → 表示された URL（<code>.../exec</code>）を下に貼り付け！
+                        </li>
+                    </ol>
 
-                <!-- 初回のみ：Google OAuth 2.0 クライアントID/Secret 設定 -->
-                <details th:open="${openOAuthSetup}"
-                         style="margin-top: 0.9rem; padding: 0.85rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
-                    <summary style="cursor: pointer; font-weight: 700; font-size: 0.88rem;">
-                        初回のみ：Google OAuth 2.0 クライアントID / Secret を設定（再起動不要）
-                    </summary>
-                    <div style="margin-top: 0.75rem; font-size: 0.82rem; color: var(--text-muted);">
-                        <ol style="margin: 0 0 0.75rem 1.2rem; padding: 0; line-height: 1.7;">
-                            <li><a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> で <strong>Gmail API</strong> を有効化</li>
-                            <li>「OAuth 同意画面」（テストユーザーに自分のメールを追加）を設定</li>
-                            <li>「認証情報」→「OAuth クライアント ID（ウェブ アプリケーション）」を作成し、承認済みのリダイレクト URI に以下を設定：
-                                <div style="display: flex; gap: 0.4rem; align-items: center; margin-top: 0.3rem;">
-                                    <code id="redirect-uri-code" th:text="${oauthRedirectUri}"
-                                          style="padding: 0.25rem 0.5rem; background: #e2e8f0; border-radius: 4px; color: #0f172a;">
-                                        http://localhost:8080/auth/callback
-                                    </code>
-                                    <button type="button" class="btn btn-outline btn-sm"
-                                            onclick="copyElementText('redirect-uri-code', this)">コピー</button>
-                                </div>
-                            </li>
-                            <li>発行されたクライアント ID とシークレットを下に貼り付けて保存</li>
-                        </ol>
-
-                        <form th:action="@{/auth/oauth-config}" method="post">
-                            <div class="form-group">
-                                <label for="clientId" class="form-label">クライアント ID</label>
-                                <input type="text" id="clientId" name="clientId" class="form-control"
-                                       th:value="${oauthClientId}"
-                                       placeholder="xxxx.apps.googleusercontent.com" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="clientSecret" class="form-label">クライアント シークレット</label>
-                                <input type="password" id="clientSecret" name="clientSecret" class="form-control"
-                                       placeholder="GOCSPX-..." required>
-                            </div>
-                            <button type="submit" class="btn btn-secondary btn-sm btn-block">
-                                OAuth 設定を保存（即座に反映）
-                            </button>
-                        </form>
-                    </div>
-                </details>
-
-                <!-- OAuth 2.0 Playground アクセストークンで今すぐ試す -->
-                <details style="margin-top: 0.65rem; padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
-                    <summary style="cursor: pointer; font-weight: 600; font-size: 0.86rem;">
-                        OAuth 2.0 Playground アクセストークン（<code>ya29...</code>）で今すぐ試す
-                    </summary>
-                    <form th:action="@{/auth/oauth-token}" method="post" style="margin-top: 0.75rem;">
-                        <div class="form-group">
-                            <label for="token-email" class="form-label">メールアドレス</label>
-                            <input type="email" id="token-email" name="email" class="form-control"
-                                   th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="accessToken" class="form-label">Gmail API アクセストークン（<code>gmail.readonly</code>）</label>
-                            <input type="text" id="accessToken" name="accessToken" class="form-control"
-                                   placeholder="ya29.a0..." required>
-                            <small style="display: block; margin-top: 0.25rem; color: var(--text-muted); font-size: 0.78rem;">
-                                <a href="https://developers.google.com/oauthplayground/" target="_blank" rel="noopener noreferrer">
-                                    OAuth 2.0 Playground
-                                </a> で <code>https://www.googleapis.com/auth/gmail.readonly</code> を認可してトークンを取得できます。
-                            </small>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-sm btn-block">
-                            Gmail API から小テストを取得してログイン
-                        </button>
-                    </form>
-                </details>
-            </section>
-
-            <!-- 方法②：Google Apps Script (GAS) ウェブアプリ連携 -->
-            <section class="card">
-                <div class="card-header">
-                    <h2 class="card-title">方法②：Google Apps Script (GAS) 連携</h2>
-                    <span class="badge badge-primary">Google Cloud 設定不要</span>
-                </div>
-
-                <p style="margin-top: 0; font-size: 0.88rem; color: var(--text-muted);">
-                    ご自身の Google アカウントで GAS スクリプトを1回デプロイするだけで、外部アプリ認証なしで自分の Gmail から manaba 小テストメールを取得できます。
-                </p>
-
-                <details style="margin-bottom: 1rem; padding: 0.85rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
-                    <summary style="cursor: pointer; font-weight: 700; font-size: 0.88rem;">
-                        GAS セットアップ手順＆1クリックコピー用コードを表示
-                    </summary>
-                    <div style="margin-top: 0.75rem; font-size: 0.82rem; color: var(--text-muted);">
-                        <ol style="margin: 0 0 0.75rem 1.2rem; padding: 0; line-height: 1.7;">
-                            <li><a href="https://script.google.com" target="_blank" rel="noopener noreferrer">Google Apps Script (script.google.com)</a> を開き、「新しいプロジェクト」を作成</li>
-                            <li>下の「GASコードをコピー」を押してエディタに貼り付け、保存（<code>Ctrl+S</code>）</li>
-                            <li>「デプロイ」→「新しいデプロイ」→「ウェブアプリ」を選択し、<strong>アクセスできるユーザー：全員</strong> にしてデプロイ → 表示されたウェブアプリ URL を下のフォームに貼り付け
-                                <br><span style="color: var(--secondary);">※ 大学組織ポリシー等で「全員」が選べない場合は、GAS エディタ上で関数 <code>exportManabaJson</code> を実行し、ログに出力された JSON をログイン後の貼り付けモーダルに入れても取り込めます。</span>
-                            </li>
-                        </ol>
-
-                        <div style="display: flex; justify-content: flex-end; margin-bottom: 0.35rem;">
+                    <details>
+                        <summary style="cursor: pointer; font-weight: 700; color: var(--primary-dark);">
+                            コピー用 GAS コードを表示（<code>doGet</code> ブラウザ自動送信 ＋ <code>exportManabaJson</code> 付き）
+                        </summary>
+                        <div style="display: flex; justify-content: flex-end; margin: 0.5rem 0 0.35rem;">
                             <button type="button" class="btn btn-primary btn-sm"
                                     onclick="copyElementText('gas-script-code', this)">
                                 GASコードをコピー
                             </button>
                         </div>
                         <pre id="gas-script-code"
-                             style="margin: 0; padding: 0.75rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.74rem; overflow-x: auto; line-height: 1.45;">const SYNC_TOKEN = 'manaba-sync-2026';
-
-function collectManabaMessages() {
-  const query = 'from:do-not-reply@manaba.jp OR manaba OR (小テスト (受付終了 OR 締切 OR コース))';
-  const threads = GmailApp.search(query, 0, 50);
-  const emails = [];
-  for (const thread of threads) {
-    for (const msg of thread.getMessages()) {
+                             style="margin: 0; padding: 0.75rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.74rem; overflow-x: auto; line-height: 1.45;">function collectManabaMessages(paramEmail, paramGasUrl) {
+  var query = 'from:manaba OR "do-not-reply@manaba.jp" OR (manaba 小テスト) OR manaba';
+  var threads = GmailApp.search(query, 0, 40);
+  var emails = [];
+  for (var i = 0; i &lt; threads.length; i++) {
+    var msgs = threads[i].getMessages();
+    for (var j = 0; j &lt; msgs.length; j++) {
+      var m = msgs[j];
       emails.push({
-        subject: msg.getSubject(),
-        body: msg.getPlainBody(),
-        date: msg.getDate().toISOString()
+        subject: m.getSubject(),
+        from: m.getFrom(),
+        date: m.getDate().toISOString(),
+        body: m.getPlainBody()
       });
     }
   }
   return {
-    email: Session.getActiveUser().getEmail(),
+    email: Session.getActiveUser().getEmail() || paramEmail || '',
+    gasUrl: ScriptApp.getService().getUrl() || paramGasUrl || '',
     emails: emails
   };
 }
 
-function doGet(e) {
-  const token = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.token) ? e.parameter.token : '';
-  if (token !== SYNC_TOKEN) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  const payload = collectManabaMessages();
-  return ContentService
-    .createTextOutput(JSON.stringify(payload))
-    .setMimeType(ContentService.MimeType.JSON);
+function escapeHtmlAttr(str) {
+  return String(str)
+    .replace(/&amp;/g, '&amp;amp;')
+    .replace(/&lt;/g, '&amp;lt;')
+    .replace(/&gt;/g, '&amp;gt;')
+    .replace(/"/g, '&amp;quot;')
+    .replace(/'/g, '&amp;#39;');
 }
 
-// 組織制限等で「全員」公開ができない場合：エディタでこの関数を実行し、ログ出力をコピー
-function exportManabaJson() {
-  const payload = collectManabaMessages();
-  Logger.log(JSON.stringify(payload));
-}</pre>
-                    </div>
-                </details>
+function doGet(e) {
+  var rawCallback = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.callback) ? e.parameter.callback : 'http://localhost:8080/auth/gas-callback';
+  var callback = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/auth\/gas-callback$/.test(rawCallback)
+    ? rawCallback
+    : 'http://localhost:8080/auth/gas-callback';
+  var paramEmail = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.email) ? e.parameter.email : '';
+  var paramGasUrl = (e &amp;&amp; e.parameter &amp;&amp; e.parameter.gasUrl) ? e.parameter.gasUrl : '';
 
-                <form th:action="@{/auth/gas-login}" method="post">
+  var payload = collectManabaMessages(paramEmail, paramGasUrl);
+  var payloadJson = JSON.stringify(payload);
+  var count = payload.emails.length;
+
+  var html = '&lt;!DOCTYPE html&gt;&lt;html lang="ja"&gt;&lt;head&gt;&lt;meta charset="UTF-8"&gt;'
+    + '&lt;style&gt;body{font-family:sans-serif;max-width:540px;margin:40px auto;padding:20px;text-align:center;}'
+    + '.btn{background:#2563eb;color:#fff;border:none;padding:14px 22px;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;margin:8px;}'
+    + '.btn2{background:#e2e8f0;color:#0f172a;}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;'
+    + '&lt;h2&gt;manaba 通知メールを取得しました（' + count + '件）&lt;/h2&gt;'
+    + '&lt;p&gt;自動でアプリへ戻らない場合は、下のボタンを押してください。&lt;/p&gt;'
+    + '&lt;form id="syncForm" method="POST" action="' + escapeHtmlAttr(callback) + '" target="_top"&gt;'
+    + '&lt;input type="hidden" name="payload" value="' + escapeHtmlAttr(payloadJson) + '"&gt;'
+    + '&lt;button type="submit" class="btn"&gt;アプリへ送信してログインする（取得件数: ' + count + '件）&lt;/button&gt;'
+    + '&lt;/form&gt;'
+    + '&lt;button type="button" class="btn btn2" onclick="copyJson()"&gt;JSONをコピー&lt;/button&gt;'
+    + '&lt;script&gt;'
+    + 'var rawJson = ' + JSON.stringify(payloadJson) + ';'
+    + 'function copyJson(){ navigator.clipboard.writeText(rawJson).then(function(){ alert("JSONをコピーしました"); }); }'
+    + 'setTimeout(function(){ document.getElementById("syncForm").submit(); }, 300);'
+    + '&lt;/script&gt;&lt;/body&gt;&lt;/html&gt;';
+
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('manaba 課題通知システム 連携')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function exportManabaJson() {
+  Logger.log(JSON.stringify(collectManabaMessages('', '')));
+}</pre>
+                    </details>
+                </div>
+
+                <form th:action="@{/auth/gas-browser-start}" method="post">
                     <div class="form-group">
-                        <label for="gasUrl" class="form-label">GAS ウェブアプリ URL <span style="color: var(--danger);">*</span></label>
+                        <label for="gasUrl" class="form-label">GAS ウェブアプリ URL（自分のみ公開でOK） <span style="color: var(--danger);">*</span></label>
                         <input type="url" id="gasUrl" name="gasUrl" class="form-control"
                                th:value="${attemptedGasUrl}"
-                               placeholder="https://script.google.com/macros/s/.../exec" required>
+                               placeholder="https://script.google.com/macros/s/AKfycb.../exec" required>
                     </div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label for="gasToken" class="form-label">同期トークン</label>
-                            <input type="text" id="gasToken" name="gasToken" class="form-control"
-                                   th:value="${attemptedGasToken != null ? attemptedGasToken : 'manaba-sync-2026'}">
-                        </div>
-                        <div class="form-group">
-                            <label for="gas-email" class="form-label">メールアドレス（任意）</label>
-                            <input type="email" id="gas-email" name="email" class="form-control"
-                                   th:value="${attemptedEmail}"
-                                   placeholder="未入力時は GAS 応答から自動取得">
-                        </div>
+                    <div class="form-group">
+                        <label for="gas-email" class="form-label">メールアドレス（任意・未入力時は GAS から自動検出）</label>
+                        <input type="email" id="gas-email" name="email" class="form-control"
+                               th:value="${attemptedEmail}"
+                               placeholder="例: s24g3128zz@chibatech.ac.jp">
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">
-                        GAS 経由で小テストを取得してログイン
+                        GAS を開いて自分の Gmail から小テストを取得＆ログイン
                     </button>
                 </form>
             </section>
 
-            <!-- メール連携をスキップしてログイン（控えめな補助フォーム） -->
+            <!-- 方法②（折りたたみ）：Google OAuth 2.0 + Gmail API -->
+            <section class="card">
+                <details th:open="${openOAuthSetup}">
+                    <summary style="cursor: pointer; font-weight: 700; font-size: 1rem;">
+                        方法②：Google OAuth 2.0 + Gmail API で連携（設計書準拠・個人アカウント向け）
+                    </summary>
+
+                    <div style="margin-top: 0.9rem;">
+                        <p style="margin-top: 0; font-size: 0.85rem; color: var(--text-muted);">
+                            個人の Google アカウント等で Google Cloud Console を利用できる場合は、OAuth 2.0（<code>gmail.readonly</code>）で直接連携できます。<br>
+                            <small>※ Google Cloud の OAuth 同意画面は HTTPS が必要ですが、OAuth クライアント ID の「承認済みのリダイレクト URI」には <code>http://localhost:8080/auth/callback</code> をそのまま登録できます。</small>
+                        </p>
+
+                        <a th:href="@{/auth/google}" class="btn btn-google btn-block" id="google-oauth-btn" style="margin-bottom: 0.85rem;">
+                            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"/>
+                                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"/>
+                                <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"/>
+                                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"/>
+                            </svg>
+                            <span>Google アカウントでログイン &amp; Gmail 連携</span>
+                        </a>
+
+                        <div style="padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.75rem;">
+                            <div style="font-weight: 700; font-size: 0.85rem; margin-bottom: 0.5rem;">
+                                OAuth クライアント ID / Secret 設定（再起動不要）
+                                <span th:if="${oauthConfigured}" class="badge badge-success" style="margin-left: 0.35rem;">設定済み</span>
+                            </div>
+                            <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.65rem; font-size: 0.8rem;">
+                                <span>リダイレクト URI:</span>
+                                <code id="redirect-uri-code" th:text="${oauthRedirectUri}"
+                                      style="padding: 0.2rem 0.45rem; background: #e2e8f0; border-radius: 4px;">
+                                    http://localhost:8080/auth/callback
+                                </code>
+                                <button type="button" class="btn btn-outline btn-sm"
+                                        onclick="copyElementText('redirect-uri-code', this)">コピー</button>
+                            </div>
+                            <form th:action="@{/auth/oauth-config}" method="post">
+                                <div class="form-group">
+                                    <label for="clientId" class="form-label">クライアント ID</label>
+                                    <input type="text" id="clientId" name="clientId" class="form-control"
+                                           th:value="${oauthClientId}" placeholder="xxxx.apps.googleusercontent.com" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="clientSecret" class="form-label">クライアント シークレット</label>
+                                    <input type="password" id="clientSecret" name="clientSecret" class="form-control"
+                                           placeholder="GOCSPX-..." required>
+                                </div>
+                                <button type="submit" class="btn btn-secondary btn-sm btn-block">OAuth 設定を保存</button>
+                            </form>
+                        </div>
+
+                        <form th:action="@{/auth/oauth-token}" method="post"
+                              style="padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
+                            <div style="font-weight: 700; font-size: 0.85rem; margin-bottom: 0.5rem;">
+                                OAuth 2.0 Playground アクセストークンで試す
+                            </div>
+                            <div class="form-group">
+                                <label for="token-email" class="form-label">メールアドレス</label>
+                                <input type="email" id="token-email" name="email" class="form-control"
+                                       th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="accessToken" class="form-label">アクセストークン（<code>ya29...</code>）</label>
+                                <input type="text" id="accessToken" name="accessToken" class="form-control"
+                                       placeholder="ya29.a0..." required>
+                            </div>
+                            <button type="submit" class="btn btn-outline btn-sm btn-block">
+                                トークンで Gmail API 取得＆ログイン
+                            </button>
+                        </form>
+                    </div>
+                </details>
+            </section>
+
+            <!-- 方法③（折りたたみ）：GAS JSON 貼り付け / スキップログイン -->
             <section class="card" style="background: #f8fafc;">
                 <details>
-                    <summary style="cursor: pointer; font-weight: 600; font-size: 0.9rem; color: var(--secondary);">
-                        メール連携をスキップしてログイン（メール本文・GAS JSON 貼り付け／手動登録）
+                    <summary style="cursor: pointer; font-weight: 700; font-size: 0.95rem; color: var(--secondary);">
+                        方法③：GAS 出力 JSON / メール本文を貼り付けてログイン（ブラウザ遷移が使えない場合）
                     </summary>
-                    <form th:action="@{/auth/login}" method="post" style="margin-top: 0.85rem;">
-                        <div class="grid-2">
+
+                    <div style="margin-top: 0.85rem;">
+                        <form th:action="@{/auth/gas-json-login}" method="post" style="margin-bottom: 1rem;">
                             <div class="form-group">
-                                <label for="manual-email" class="form-label">メールアドレス <span style="color: var(--danger);">*</span></label>
-                                <input type="email" id="manual-email" name="email" class="form-control"
-                                       th:value="${attemptedEmail}"
-                                       placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                                <label for="jsonPayload" class="form-label">GAS 出力 JSON（<code>exportManabaJson()</code> または画面の「JSONをコピー」結果）</label>
+                                <textarea id="jsonPayload" name="jsonPayload" class="form-control" rows="4"
+                                          placeholder='{"email":"s24g3128zz@chibatech.ac.jp","emails":[...]}' required></textarea>
                             </div>
                             <div class="form-group">
-                                <label for="manual-name" class="form-label">表示名（任意）</label>
-                                <input type="text" id="manual-name" name="displayName" class="form-control"
-                                       placeholder="未入力時は自動設定">
+                                <label for="json-email" class="form-label">メールアドレス（任意・JSONに含まれていれば自動取得）</label>
+                                <input type="email" id="json-email" name="email" class="form-control"
+                                       th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp">
                             </div>
-                        </div>
-                        <button type="submit" class="btn btn-outline btn-sm btn-block">
-                            連携なしでログインして貼り付け・手動登録へ進む
-                        </button>
-                    </form>
+                            <button type="submit" class="btn btn-primary btn-sm btn-block">
+                                GAS JSON を取り込んでログイン
+                            </button>
+                        </form>
+
+                        <div class="divider"><span>または メール連携をスキップしてログイン</span></div>
+
+                        <form th:action="@{/auth/login}" method="post">
+                            <div class="grid-2">
+                                <div class="form-group">
+                                    <label for="manual-email" class="form-label">メールアドレス <span style="color: var(--danger);">*</span></label>
+                                    <input type="email" id="manual-email" name="email" class="form-control"
+                                           th:value="${attemptedEmail}" placeholder="例: s24g3128zz@chibatech.ac.jp" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="manual-name" class="form-label">表示名（任意）</label>
+                                    <input type="text" id="manual-name" name="displayName" class="form-control"
+                                           placeholder="未入力時は自動設定">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-outline btn-sm btn-block">
+                                連携なしでログイン（あとでメール本文貼り付け／手動追加）
+                            </button>
+                        </form>
+                    </div>
                 </details>
 
                 <!-- Web Push 通知許可ステータス表示 -->
@@ -274,43 +301,43 @@ function exportManabaJson() {
         <!-- 右カラム：システムの仕組み & 対応フォーマット -->
         <aside class="card">
             <div class="card-header">
-                <h2 class="card-title">取得対象と解析の仕組み</h2>
-                <span class="badge badge-primary">小テスト対応</span>
+                <h2 class="card-title">ブラウザ経由 GAS 連携の仕組み</h2>
+                <span class="badge badge-primary">組織制限クリア</span>
             </div>
 
             <div class="step-list">
                 <div class="step-item">
                     <span class="step-num">1</span>
                     <div>
-                        <h4>実メールから自動抽出（ダミー投入なし）</h4>
-                        <p>Google OAuth 2.0 または GAS 連携で自分の Gmail から <code>manaba</code> / <code>小テスト</code> メールを検索し、実データのみ登録します。</p>
+                        <h4>ブラウザが Google 認証済みセッションを活用</h4>
+                        <p>サーバから GAS を叩くと「全員」公開が必要ですが、本方式はログイン済みブラウザが GAS（「自分のみ」公開）を開いてフォーム POST するため安全です。</p>
                     </div>
                 </div>
                 <div class="step-item">
                     <span class="step-num">2</span>
                     <div>
-                        <h4>公開時間・締切時間の両方を解析</h4>
-                        <p><code>[受付開始日時]</code>（公開時間）と <code>[受付終了日時]</code>（締切時間）、manaba URL を自動抽出します。</p>
+                        <h4>公開時間・締切時間を柔軟に自動抽出</h4>
+                        <p><code>[受付開始日時]</code>・<code>[受付終了日時]</code>・<code>■コース名</code>・期間表記・曜日付き日時など多様な manaba 通知形式を解析します。</p>
                     </div>
                 </div>
                 <div class="step-item">
                     <span class="step-num">3</span>
                     <div>
-                        <h4>通知時刻と科目別 ON/OFF 設定</h4>
-                        <p>締切 24時間前・5時間前・1時間前など複数タイミングと、科目ごとの通知可否をカスタマイズできます。</p>
+                        <h4>解析できないメールもその場で確認可能</h4>
+                        <p>manaba 関連メールが見つかり形式が特殊でスキップされた場合も、課題一覧画面のデバッグパネルで件名・本文を確認できます。</p>
                     </div>
                 </div>
                 <div class="step-item">
                     <span class="step-num">4</span>
                     <div>
-                        <h4>メール本文・GAS JSON 貼り付け対応</h4>
-                        <p>組織制限で外部アクセスできない場合も、<code>exportManabaJson()</code> の出力 JSON やメール本文を貼るだけで一括登録できます。</p>
+                        <h4>通知設定・自動リマインド・受験済管理</h4>
+                        <p>24時間前・5時間前・1時間前などの複数通知や科目別 ON/OFF、受験済/提出済ボタンによる通知停止まで一気通貫で動作します。</p>
                     </div>
                 </div>
             </div>
 
             <div style="margin-top: 1rem; padding: 0.85rem; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 0.78rem; font-family: monospace; line-height: 1.5;">
-                <div style="color: #93c5fd; font-weight: bold; margin-bottom: 0.35rem;">解析対応フォーマット例（manaba 通知メール）:</div>
+                <div style="color: #93c5fd; font-weight: bold; margin-bottom: 0.35rem;">解析対応フォーマット例（manaba 小テスト通知）:</div>
                 [コース名] : ソフトウェア工学<br>
                 [小テスト名] : 第8回確認小テスト<br>
                 [受付開始日時] : 2026-11-18 10:00<br>
