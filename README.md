@@ -9,8 +9,8 @@ manaba 本体へ直接干渉（スクレイピングやパスワード保存）�
 
 - **利用者**: manaba を利用する学生（PC・スマートフォン Web ブラウザ対応）
 - **主な機能**:
-  1. **Google ログイン & Gmail 連携（機能A）**: OAuth 2.0 で安全に認証し、Gmail に届く manaba 課題通知メールから科目名・課題名・締切日時を自動抽出・登録。
-  2. **課題一覧・提出済み管理（機能B）**: 課題を締切が近い順に表示し、残り時間・緊急度バッジを可視化。「提出済み」ボタンで以後のリマインド通知を自動停止。
+  1. **Google OAuth 2.0 / GAS 連携（機能A）**: アプリパスワード不要で Google OAuth 2.0（Gmail API）または Google Apps Script (GAS) ウェブアプリ経由で実 Gmail に届く manaba 小テスト・課題通知メールを自動取得し、公開時間・締切時間・URL を抽出・登録。
+  2. **課題一覧・提出済み管理（機能B）**: 小テスト・課題を締切が近い順に表示し、種別バッジ・公開時間・締切時間・残り時間・緊急度バッジを可視化。「受験済み／提出済み」ボタンで以後のリマインド通知を自動停止。
   3. **通知設定（機能C）**: 締切前の複数通知タイミング（例：`24時間前・5時間前・1時間前`）および科目ごとの通知 ON / OFF を設定。
   4. **自動通知送信・通知履歴／再試行（機能D）**: 定期スケジューラ（`@Scheduled`）が未提出課題を判定して Web Push 通知を送信。送信結果（`SUCCESS` / `FAILED`）を履歴表示し、失敗分の再試行にも対応。
 
@@ -36,12 +36,12 @@ flowchart LR
     Browser["学生 (PC / スマホ Web ブラウザ)<br/>Thymeleaf HTML + Service Worker"]
     App["Spring Boot Web サーバ<br/>Auth / Task / Setting / History Controller<br/>TaskFetchService / NotificationScheduler"]
     DB[("H2 Database<br/>(users / tasks /<br/>notification_settings / notification_logs)")]
-    Google["Google OAuth 2.0 / Gmail API<br/>(認証・manaba 通知メール取得)"]
+    Google["Google OAuth 2.0 (Gmail API) /<br/>Google Apps Script (GAS)<br/>(実メール取得・小テスト解析)"]
     Push["Web Push API / Browser Notification<br/>(締切前リマインド配信)"]
 
     Browser <-->|"HTTP / Session Cookie (user_id)"| App
     App <-->|"JPA / Hibernate"| DB
-    App <-->|"OAuth 認可 / メール解析"| Google
+    App <-->|"OAuth 2.0 / GAS JSON 連携"| Google
     App -->|"通知ペイロード送信"| Push
     Push -->|"プッシュ通知表示・タップで /tasks へ"| Browser
 ```
@@ -52,7 +52,7 @@ flowchart LR
 flowchart TD
     Root["GET / または /login"] -->|"未ログイン"| Login["連携画面 (login.html)"]
     Root -->|"ログイン済み (Session / Cookie)"| Tasks["課題一覧画面 (tasks.html)<br/>GET /tasks"]
-    Login -->|"GET /auth/google → /auth/callback<br/>または POST /auth/login"| Tasks
+    Login -->|"GET /auth/google → /auth/callback<br/>POST /auth/gas-login / POST /auth/login"| Tasks
     Tasks <-->|"ナビゲーション切替"| Settings["通知設定画面 (settings.html)<br/>GET /settings"]
     Tasks <-->|"ナビゲーション切替"| History["通知履歴画面 (history.html)<br/>GET /history"]
     Settings <-->|"ナビゲーション切替"| History
@@ -133,21 +133,22 @@ cd manaba-notifier
 
 詳細設計書の利用シーン（1〜6）に沿って、以下の順で一通りの機能を実演できます。
 
-1. **ログイン・Gmail 課題取得（`/login`）**
-   - 「Google アカウントでログイン & Gmail 連携」ボタン（またはメールアドレスフォーム）でログイン。
-   - 自動的に manaba 課題サンプル（「ソフトウェア工学」「データベースシステム」「コンピュータネットワーク」「人工知能基礎」）と初期通知設定（`24,5,1`）、初期履歴（`SUCCESS` 1件・`FAILED` 1件）が投入され、`/tasks` へ遷移します。
-   - 画面上部の「通知を許可する」ボタンでブラウザの通知許可と `/auth/push-subscribe` 登録を有効化できます。
-2. **課題一覧の確認（`/tasks`）**
-   - 締切が近い順に並んだ課題と残り時間・緊急度バッジ（`締切間近` 等）を確認します。
-   - 必要に応じて「＋ 課題を手動追加」や「Gmail同期」ボタンも試せます。
+1. **ログイン・実 Gmail 連携（`/login`）**
+   - **方法①（Google OAuth 2.0）**: 画面内の設定パネルからクライアント ID / シークレットを保存（再起動不要・`config/google-oauth.properties` にローカル保存）して「Google アカウントでログイン & Gmail 連携」を実行、または OAuth 2.0 Playground のアクセストークンで直接連携します。
+   - **方法②（Google Apps Script / GAS 連携）**: ログイン画面の GAS コードをコピーして自分の Google アカウントでウェブアプリとしてデプロイし、URL を貼り付けるだけでアプリパスワード・Google Cloud 設定不要で実 Gmail の manaba 小テストメールを取得します。
+   - **スキップログイン＋貼り付け**: メールアドレスのみでログインし、ログイン後に manaba 通知メール本文や GAS の `exportManabaJson()` 出力 JSON を貼り付けて取り込むことも可能です。
+   - 画面の「通知を許可する」ボタンでブラウザの通知許可と `/auth/push-subscribe` 登録を有効化できます。
+2. **課題・小テスト一覧の確認（`/tasks`）**
+   - 締切が近い順に並んだ小テスト・課題と、種別バッジ・公開時間・締切時間・残り時間・緊急度バッジを確認します。
+   - 上部の「Gmailから最新の小テストを取得」「manaba通知メール / GAS JSON を貼り付けて追加」「＋ 小テストを手動追加」も利用できます。
 3. **通知時刻・科目別 ON/OFF の設定（`/settings`）**
    - 通知タイミング（例：`24時間前`, `5時間前`, `1時間前` ＋ カスタム時間）と科目別 ON/OFF を変更して保存します。
    - 「すべて解除」して保存するとバリデーションエラー「通知時刻を正しく設定してください」が表示されることも確認できます。
 4. **自動通知チェック & 通知履歴／再試行（`/history`）**
    - 「今すぐ通知チェック実行」を押すと、`NotificationScheduler` が未提出課題と設定を突き合わせて Web Push 通知を発火し、`SUCCESS` 履歴とブラウザ通知ポップアップが表示されます。
-   - 「失敗ケースをシミュレート」または初期 `FAILED` ログの「再試行」ボタンを押すと、再送信が実行されて `SUCCESS` へ更新されます。
-5. **提出済み切替による通知停止（`/tasks`）**
-   - 課題一覧に戻り、対象課題の「提出済みにする」を押すと `is_submitted = true` となり、以降の通知チェック対象から除外されます。
+   - 「失敗ケースをシミュレート」を押し、`FAILED` ログの「再試行」ボタンを押すと再送信が実行されて `SUCCESS` へ更新されます。
+5. **受験済み／提出済み切替による通知停止（`/tasks`）**
+   - 課題一覧に戻り、対象小テストの「受験済みにする（提出済みにする）」を押すと `is_submitted = true` となり、以降の通知チェック対象から除外されます。
 
 ---
 
