@@ -50,9 +50,18 @@
                    style="padding: 0.85rem 1.25rem; font-size: 1rem; text-decoration: none; text-align: center;">
                     大学 Google アカウントでログイン &amp; 小テストを自動取得
                 </a>
-                <p style="margin: 0.65rem 0 0; font-size: 0.8rem; color: var(--text-muted);">
-                    ※ 初回のみ Google の「Gmail 読み取り許可」確認画面が表示されます。許可すると自動でこのアプリへ戻ります。<br>
-                    ※ 個人用 Gmail と大学アカウントを両方ログイン中のブラウザで Google 側エラーになる場合は、大学アカウントだけのプロファイルまたはシークレットウィンドウでお試しください。
+                <div style="margin-top: 0.55rem; text-align: right; font-size: 0.78rem;">
+                    <a th:href="@{/auth/gas-shared-start(direct=true)}" style="color: var(--text-muted); text-decoration: underline;">
+                        アカウント選択画面をスキップして直接開く
+                    </a>
+                </div>
+                <div style="margin-top: 0.75rem; padding: 0.7rem 0.85rem; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; font-size: 0.8rem; color: #92400e; line-height: 1.55;">
+                    <strong>「現在、ファイルを開くことができません」と表示された場合：</strong><br>
+                    個人用 <code>@gmail.com</code> と大学用 <code>@chibatech.ac.jp</code> の両方にログインしているブラウザでは、Google 側の複数アカウント競合でこのエラーが出ることがあります。<br>
+                    その場合は<strong>シークレットウィンドウ（プライベートブラウザ）</strong>でこのページを開き、<strong>大学アカウント（<code>@chibatech.ac.jp</code>）のみ</strong>でログインしてください。
+                </div>
+                <p style="margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--text-muted);">
+                    ※ 初回のみ Google の「Gmail 読み取り許可」確認画面が表示されます。許可すると自動でこのアプリへ戻ります。
                 </p>
             </section>
 

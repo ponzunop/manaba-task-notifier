@@ -160,16 +160,27 @@ public class AuthController {
      * マルチユーザー共有モード：管理者が登録済みの共有 GAS ウェブアプリ（「アクセスしているユーザーとして実行」）を使って
      * 他の学生が設定不要・1クリックで自分の Gmail から小テストを取得＆ログインする。
      * GET / POST 両対応（GET リンク経由にすることで Chrome の CSP form-action による Google/大学SSO リダイレクト遮断を回避）。
+     * デフォルトでは Google 公式の AccountChooser 経由にすることで、個人用 @gmail.com と大学アカウントを
+     * 同時ログインしているブラウザでの「現在、ファイルを開くことができません」エラーを軽減する。
      */
     @GetMapping("/auth/gas-shared-start")
     public String startSharedGasBrowserFlowGet(
+            @RequestParam(name = "direct", required = false, defaultValue = "false") boolean direct,
             HttpSession session,
             Model model) {
-        return startSharedGasBrowserFlow(session, model);
+        return startSharedGasBrowserFlowInternal(direct, session, model);
     }
 
     @PostMapping("/auth/gas-shared-start")
     public String startSharedGasBrowserFlow(
+            @RequestParam(name = "direct", required = false, defaultValue = "false") boolean direct,
+            HttpSession session,
+            Model model) {
+        return startSharedGasBrowserFlowInternal(direct, session, model);
+    }
+
+    private String startSharedGasBrowserFlowInternal(
+            boolean direct,
             HttpSession session,
             Model model) {
 
@@ -184,7 +195,11 @@ public class AuthController {
         session.removeAttribute(SESSION_PENDING_EMAIL);
 
         String gasState = registerPendingGasFlow(sharedUrl, null);
-        return "redirect:" + buildGasBrowserRedirectUrl(sharedUrl, null, gasState);
+        String gasTargetUrl = buildGasBrowserRedirectUrl(sharedUrl, null, gasState);
+        if (direct) {
+            return "redirect:" + gasTargetUrl;
+        }
+        return "redirect:" + wrapWithGoogleAccountChooser(gasTargetUrl, sharedUrl);
     }
 
     /**
@@ -921,6 +936,48 @@ public class AuthController {
             sb.append("&email=").append(urlEncode(email));
         }
         return sb.toString();
+    }
+
+    /**
+     * 複数 Google アカウント同時ログイン環境での GAS「現在、ファイルを開くことができません」エラーを防ぐため、
+     * Google 公式の AccountChooser を経由して大学アカウントを選択させる。
+     */
+    private String wrapWithGoogleAccountChooser(String gasTargetUrl, String rawGasUrl) {
+        String domain = extractWorkspaceDomain(rawGasUrl);
+        StringBuilder sb = new StringBuilder("https://accounts.google.com/AccountChooser?");
+        if (domain != null) {
+            sb.append("hd=").append(urlEncode(domain)).append("&");
+        }
+        sb.append("continue=").append(urlEncode(gasTargetUrl));
+        return sb.toString();
+    }
+
+    private String extractWorkspaceDomain(String gasUrl) {
+        if (gasUrl == null || gasUrl.isBlank()) {
+            return null;
+        }
+        try {
+            String path = URI.create(gasUrl.trim()).getPath();
+            if (path == null) {
+                return null;
+            }
+            if (path.startsWith("/a/macros/")) {
+                String rest = path.substring("/a/macros/".length());
+                int slash = rest.indexOf('/');
+                if (slash > 0) {
+                    return rest.substring(0, slash);
+                }
+            } else if (path.startsWith("/a/")) {
+                String rest = path.substring("/a/".length());
+                int slash = rest.indexOf('/');
+                if (slash > 0) {
+                    return rest.substring(0, slash);
+                }
+            }
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+        return null;
     }
 
     private String resolvePublicOrigin() {

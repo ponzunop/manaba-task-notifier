@@ -236,7 +236,7 @@ class SecurityHardeningTest {
         MockHttpSession startSession = (MockHttpSession) loginPage.getRequest().getSession(false);
         String csrf = (String) startSession.getAttribute(SecurityFilter.SESSION_CSRF_TOKEN);
 
-        // 2. 1クリックボタン（GET / POST /auth/gas-shared-start）が共有 GAS URL + returnUrl + gasState へ遷移すること
+        // 2. 1クリックボタン（GET / POST /auth/gas-shared-start）が AccountChooser 経由で共有 GAS URL + returnUrl + gasState へ遷移すること
         MvcResult getRedirectRes = mockMvc.perform(get("/auth/gas-shared-start")
                         .session(startSession)
                         .header("X-Forwarded-Proto", "https")
@@ -244,9 +244,23 @@ class SecurityHardeningTest {
                 .andExpect(status().is3xxRedirection())
                 .andReturn();
         String getLocation = getRedirectRes.getResponse().getRedirectedUrl();
-        assertThat(getLocation).startsWith("https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec");
-        assertThat(getLocation).contains("returnUrl=https%3A%2F%2Fmanaba-notifier-production.up.railway.app%2Fauth%2Fgas-callback");
-        assertThat(getLocation).contains("gasState=");
+        assertThat(getLocation).startsWith("https://accounts.google.com/AccountChooser?hd=chibatech.ac.jp&continue=");
+        assertThat(getLocation).contains("script.google.com");
+        assertThat(getLocation).contains("manaba-notifier-production.up.railway.app");
+        assertThat(getLocation).contains("gasState");
+
+        // direct=true 時は直接共有 GAS URL へ遷移すること
+        MvcResult directRedirectRes = mockMvc.perform(get("/auth/gas-shared-start")
+                        .param("direct", "true")
+                        .session(startSession)
+                        .header("X-Forwarded-Proto", "https")
+                        .header("X-Forwarded-Host", "manaba-notifier-production.up.railway.app"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String directLocation = directRedirectRes.getResponse().getRedirectedUrl();
+        assertThat(directLocation).startsWith("https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec");
+        assertThat(directLocation).contains("returnUrl=https%3A%2F%2Fmanaba-notifier-production.up.railway.app%2Fauth%2Fgas-callback");
+        assertThat(directLocation).contains("gasState=");
 
         MvcResult redirectRes = mockMvc.perform(post("/auth/gas-shared-start")
                         .session(startSession)
@@ -254,9 +268,9 @@ class SecurityHardeningTest {
                 .andExpect(status().is3xxRedirection())
                 .andReturn();
         String location = redirectRes.getResponse().getRedirectedUrl();
-        assertThat(location).startsWith("https://script.google.com/a/macros/chibatech.ac.jp/s/AKfycbySharedMultiUser12345/exec");
-        assertThat(location).contains("returnUrl=");
-        assertThat(location).contains("gasState=");
+        assertThat(location).startsWith("https://accounts.google.com/AccountChooser?hd=chibatech.ac.jp&continue=");
+        assertThat(location).contains("returnUrl");
+        assertThat(location).contains("gasState");
 
         // 3. 学生A と 学生B がそれぞれ共有 GAS 経由でログインし、データが完全に分離されること
         String payloadA = """
